@@ -62,6 +62,16 @@ struct ToolProperty: Codable {
     }
 }
 
+struct AcknowledgementResponse: Codable {
+    let ok: Bool
+    let notificationID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case notificationID = "notification_id"
+    }
+}
+
 struct ToolListResponse: Codable {
     let tools: [ToolDefinition]
 }

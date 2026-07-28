@@ -3,10 +3,11 @@ import Foundation
 actor NotificationCoordinator {
     typealias IsIdle = @Sendable () async -> Bool
 
-    typealias Deliver = @Sendable (
-        PendingNotification,
-        Bool
-    ) async throws -> Bool
+    typealias Deliver =
+        @Sendable (
+            PendingNotification,
+            Bool
+        ) async throws -> Bool
 
     private let toolServer: ToolServerClient
     private let isIdle: IsIdle
@@ -56,6 +57,10 @@ actor NotificationCoordinator {
         }
 
         activeReminder = nil
+    }
+
+    func isActive(notificationID: String) -> Bool {
+        activeReminder?.notification.id == notificationID
     }
 
     private func run() async {

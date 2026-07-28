@@ -6,6 +6,7 @@ extension VoiceAssistant {
         onSentence: @escaping (String) async throws -> Void
     ) async throws -> String {
         let mayRequireTool = mayRequireLightTool(userText)
+        let activeReminder = await notificationCoordinator?.activeReminderSnapshot()
 
         var messages = lock.withLock { () -> [Message] in
             var updated = history
@@ -18,6 +19,28 @@ extension VoiceAssistant {
                             This turn requires tool use. Your next response must contain
                             tool_calls only, with no user-facing prose, until successful
                             tool results have been provided.
+                            """
+                    )
+                )
+            }
+
+            if let activeReminder {
+                updated.append(
+                    Message(
+                        role: "system",
+                        content: SystemPrompts.activeReminderResponseInstruction
+                    )
+                )
+
+                updated.append(
+                    Message(
+                        role: "system",
+                        content: """
+                            Active reminder notification ID:
+                            \(activeReminder.id)
+
+                            Active reminder text:
+                            \(activeReminder.text)
                             """
                     )
                 )
@@ -56,6 +79,13 @@ extension VoiceAssistant {
                     executedTool = true
 
                     let result = try await toolServer.runTool(toolCall)
+
+                    if toolCall.function.name == "acknowledge_notification" {
+                        await handleReminderAcknowledgement(
+                            toolCall: toolCall,
+                            result: result
+                        )
+                    }
 
                     print(
                         "\n[tool result] \(toolCall.function.name): "
@@ -125,6 +155,39 @@ extension VoiceAssistant {
                     "Tool loop exceeded its maximum number of steps."
             ]
         )
+    }
+
+    private func handleReminderAcknowledgement(
+        toolCall: ToolCall,
+        result: String
+    ) async {
+        guard
+            let notificationID = notificationID(from: toolCall),
+            let payload = try? JSONDecoder().decode(
+                AcknowledgementResponse.self,
+                from: Data(result.utf8)
+            ),
+            payload.ok
+        else {
+            return
+        }
+
+        await notificationCoordinator?.markAcknowledged(
+            notificationID: notificationID
+        )
+    }
+
+    private func notificationID(
+        from toolCall: ToolCall
+    ) -> String? {
+        guard
+            case .string(let notificationID) =
+                toolCall.function.arguments["notification_id"]
+        else {
+            return nil
+        }
+
+        return notificationID
     }
 
     private func mayRequireLightTool(_ text: String) -> Bool {

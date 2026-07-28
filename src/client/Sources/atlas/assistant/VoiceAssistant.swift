@@ -25,7 +25,7 @@ final class VoiceAssistant {
     let toolServer = ToolServerClient()
 
     private var playback: AudioPlayback!
-    private var notificationCoordinator: NotificationCoordinator?
+    var notificationCoordinator: NotificationCoordinator?
 
     private var state: AssistantState = .listening
     private var recording = Data()
@@ -140,20 +140,31 @@ final class VoiceAssistant {
                     return false
                 }
 
-                let speech = try await self.ollama
-                    .generateReminderSpeech(
-                        text: notification.text,
-                        isRepeat: isRepeat
-                    )
+                let speech = try await self.ollama.generateReminderSpeech(
+                    text: notification.text,
+                    isRepeat: isRepeat
+                )
 
                 guard !speech.isEmpty else {
                     return false
                 }
 
+                print(
+                    "\n[reminder] \(notification.text)"
+                )
+                print(
+                    "Atlas: \(speech)"
+                )
+                fflush(stdout)
+
                 let result = try await self.playback.speak(
                     speech,
                     purpose: .reminder
                 )
+
+                if result.completed {
+                    self.beginReminderConversation()
+                }
 
                 return result.completed
             }
@@ -462,6 +473,20 @@ final class VoiceAssistant {
         }
 
         print("\nAtlas is listening.")
+    }
+
+    private func beginReminderConversation() {
+        lock.withLock {
+            conversationActive = true
+            conversationTimeoutWorkItem?.cancel()
+            conversationTimeoutWorkItem = nil
+
+            history = [
+                Message(role: "system", content: Config.systemPrompt)
+            ]
+        }
+
+        print("\nAtlas is listening for your reminder response.")
     }
 
     private func resetConversationTimeout() {
