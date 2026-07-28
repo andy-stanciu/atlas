@@ -1,0 +1,10 @@
+[project]
+name = "atlas-tool-server"
+version = "0.1.0"
+description = "Atlas tools and automation runtime"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "flask>=3.0,<4.0",
+    "tzdata>=2024.1",
+]

@@ -1,0 +1,68 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_current_datetime",
+      "description": "Get the current local date, time, day of week, and time zone. Use this for questions about the current time, date, day, month, year, or local time.",
+      "parameters": {
+        "type": "object",
+        "required": [],
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_light_status",
+      "description": "Get whether the lights in a room are currently on or off. Use this when the user asks about current light status.",
+      "parameters": {
+        "type": "object",
+        "required": ["room"],
+        "properties": {
+          "room": {
+            "type": "string",
+            "description": "The room containing the lights.",
+            "enum": [
+              "kitchen",
+              "living_room",
+              "office",
+              "bedroom"
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "set_light",
+      "description": "Turn the lights in a room on or off. Use only when the user clearly asks to change the lights. If the user asks to change all rooms, call this tool once for each room.",
+      "parameters": {
+        "type": "object",
+        "required": ["room", "power"],
+        "properties": {
+          "room": {
+            "type": "string",
+            "description": "The room containing the lights.",
+            "enum": [
+              "kitchen",
+              "living_room",
+              "office",
+              "bedroom"
+            ]
+          },
+          "power": {
+            "type": "string",
+            "description": "Whether the lights should be on or off.",
+            "enum": [
+              "on",
+              "off"
+            ]
+          }
+        }
+      }
+    }
+  }
+]

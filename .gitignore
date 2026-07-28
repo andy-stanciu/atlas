@@ -1,0 +1,17 @@
+# uv environments
+**/.venv/
+.python-version
+uv.lock
+
+# Python cache
+**/__pycache__/
+*.py[cod]
+
+# Tool-server runtime state
+src/tool-server/data/
+
+# macOS
+.DS_Store
+
+# Swift
+.build/
