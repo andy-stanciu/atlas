@@ -3,9 +3,13 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from events.notifications import NotificationService
 from events.tool_handlers import EventToolHandlers
 
 from .lights import LightService
+
+
+PACIFIC_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 
 class ToolRegistry:
@@ -42,7 +46,7 @@ class ToolRegistry:
             return self._lights.set_power(arguments)
 
         if name == "acknowledge_notification":
-            return acknowledge_notification(self, arguments)
+            return self._acknowledge_notification(arguments)
 
         if self._events.handles(name):
             return self._events.run(name, arguments)
@@ -58,19 +62,27 @@ class ToolRegistry:
     def print_light_snapshot(self) -> None:
         self._lights.print_snapshot()
 
+    def _acknowledge_notification(self, arguments: dict) -> dict:
+        notification_id = arguments.get("notification_id")
 
-def acknowledge_notification(self, arguments: dict) -> dict:
-    notification_id = arguments.get("notification_id")
-    if not isinstance(notification_id, str) or not notification_id.strip():
-        return {
-            "ok": False,
-            "error": "notification_id must be a non-empty string.",
-        }
+        if (
+            not isinstance(notification_id, str)
+            or not notification_id.strip()
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "notification_id must be a non-empty string."
+                ),
+            }
 
-    return self._notifications.acknowledge(notification_id.strip())
+        return self._notifications.acknowledge(
+            notification_id.strip()
+        )
+
 
 def current_datetime() -> dict:
-    now = datetime.now(ZoneInfo("America/Los_Angeles"))
+    now = datetime.now(PACIFIC_TIMEZONE)
 
     return {
         "ok": True,
@@ -102,12 +114,14 @@ def load_tools(tools_file: Path) -> list[dict]:
         function = tool.get("function") if isinstance(tool, dict) else None
 
         if (
-            tool.get("type") != "function"
+            not isinstance(tool, dict)
+            or tool.get("type") != "function"
             or not isinstance(function, dict)
             or not isinstance(function.get("name"), str)
         ):
             raise RuntimeError(
-                "Every tool must have type 'function' and a function name."
+                "Every tool must have type 'function' and a function "
+                "name."
             )
 
     return loaded_tools

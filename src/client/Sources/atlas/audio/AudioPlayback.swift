@@ -20,6 +20,7 @@ final class AudioPlayback: @unchecked Sendable {
 
     private let beginSpeaking: () -> Bool
     private let finishSpeaking: () -> Void
+    private let beginReminderPlayback: () -> Bool
 
     init(
         player: AVAudioPlayerNode,
@@ -27,7 +28,8 @@ final class AudioPlayback: @unchecked Sendable {
         queue: DispatchQueue,
         voiceFormat: AVAudioFormat,
         beginSpeaking: @escaping () -> Bool,
-        finishSpeaking: @escaping () -> Void
+        finishSpeaking: @escaping () -> Void,
+        beginReminderPlayback: @escaping () -> Bool,
     ) {
         self.player = player
         self.kokoro = kokoro
@@ -35,6 +37,7 @@ final class AudioPlayback: @unchecked Sendable {
         self.voiceFormat = voiceFormat
         self.beginSpeaking = beginSpeaking
         self.finishSpeaking = finishSpeaking
+        self.beginReminderPlayback = beginReminderPlayback
     }
 
     func queueNormalSpeech(_ text: String) async throws {
@@ -150,7 +153,7 @@ final class AudioPlayback: @unchecked Sendable {
     ) throws {
         let outputBuffer = try makeOutputBuffer(from: wavURL)
 
-        guard beginSpeaking() else {
+        guard beginReminderPlayback() else {
             try? FileManager.default.removeItem(at: wavURL)
 
             continuation.resume(
@@ -195,10 +198,12 @@ final class AudioPlayback: @unchecked Sendable {
         let file = try AVAudioFile(forReading: wavURL)
         let sourceFrames = AVAudioFrameCount(file.length)
 
-        guard let sourceBuffer = AVAudioPCMBuffer(
-            pcmFormat: file.processingFormat,
-            frameCapacity: sourceFrames
-        ) else {
+        guard
+            let sourceBuffer = AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: sourceFrames
+            )
+        else {
             throw NSError(
                 domain: "Atlas",
                 code: 30,
@@ -211,10 +216,12 @@ final class AudioPlayback: @unchecked Sendable {
 
         try file.read(into: sourceBuffer)
 
-        guard let converter = AVAudioConverter(
-            from: file.processingFormat,
-            to: voiceFormat
-        ) else {
+        guard
+            let converter = AVAudioConverter(
+                from: file.processingFormat,
+                to: voiceFormat
+            )
+        else {
             throw NSError(
                 domain: "Atlas",
                 code: 31,
@@ -225,17 +232,21 @@ final class AudioPlayback: @unchecked Sendable {
             )
         }
 
-        let ratio = voiceFormat.sampleRate
+        let ratio =
+            voiceFormat.sampleRate
             / file.processingFormat.sampleRate
 
-        let outputCapacity = AVAudioFrameCount(
-            Double(sourceBuffer.frameLength) * ratio
-        ) + 1
+        let outputCapacity =
+            AVAudioFrameCount(
+                Double(sourceBuffer.frameLength) * ratio
+            ) + 1
 
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: voiceFormat,
-            frameCapacity: outputCapacity
-        ) else {
+        guard
+            let outputBuffer = AVAudioPCMBuffer(
+                pcmFormat: voiceFormat,
+                frameCapacity: outputCapacity
+            )
+        else {
             throw NSError(
                 domain: "Atlas",
                 code: 32,

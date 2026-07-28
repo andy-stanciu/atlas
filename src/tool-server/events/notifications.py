@@ -8,7 +8,9 @@ class NotificationService:
         self._repository = repository
 
     def next_notification(self) -> dict:
-        notification = self._repository.next_unacknowledged_notification()
+        notification = (
+            self._repository.next_unacknowledged_notification()
+        )
 
         if notification is None:
             return {
@@ -22,10 +24,12 @@ class NotificationService:
                 "id": notification.id,
                 "event_id": notification.event_id,
                 "text": notification.text,
-                "scheduled_for_utc": (
+                "scheduled_for": (
                     notification.scheduled_for_utc.isoformat()
                 ),
-                "created_at_utc": notification.created_at_utc.isoformat(),
+                "created_at": (
+                    notification.created_at_utc.isoformat()
+                ),
             },
         }
 
@@ -39,7 +43,8 @@ class NotificationService:
             return {
                 "ok": False,
                 "error": (
-                    "Notification was not found or was already acknowledged."
+                    "Notification was not found or was already "
+                    "acknowledged."
                 ),
             }
 

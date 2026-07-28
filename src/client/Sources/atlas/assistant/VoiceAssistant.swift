@@ -58,6 +58,9 @@ final class VoiceAssistant {
             },
             finishSpeaking: { [weak self] in
                 self?.bufferFinished()
+            },
+            beginReminderPlayback: { [weak self] in
+                self?.beginReminderPlayback() ?? false
             }
         )
     }
@@ -170,10 +173,14 @@ final class VoiceAssistant {
     }
 
     private func beginPlayback() -> Bool {
-        var cancelTimeout = false
+        var shouldCancelTimeout = false
 
         let didBegin = lock.withLock { () -> Bool in
-            guard state == .listening || state == .processing else {
+            switch state {
+            case .listening, .processing, .speaking:
+                break
+
+            case .recording:
                 return false
             }
 
@@ -181,16 +188,39 @@ final class VoiceAssistant {
             speechFrames = 0
             silenceFrames = 0
             queuedAudioBuffers += 1
-            cancelTimeout = conversationActive
 
+            shouldCancelTimeout = conversationActive
             return true
         }
 
-        if cancelTimeout {
+        if shouldCancelTimeout {
             cancelConversationTimeout()
         }
 
         return didBegin
+    }
+
+    private func beginReminderPlayback() -> Bool {
+        lock.withLock {
+            guard state == .listening else {
+                return false
+            }
+
+            guard queuedAudioBuffers == 0 else {
+                return false
+            }
+
+            guard !conversationActive else {
+                return false
+            }
+
+            state = .speaking
+            speechFrames = 0
+            silenceFrames = 0
+            queuedAudioBuffers = 1
+
+            return true
+        }
     }
 
     private func bufferFinished() {
@@ -518,9 +548,11 @@ final class VoiceAssistant {
         ]
 
         for pattern in patterns {
-            guard let regex = try? NSRegularExpression(
-                pattern: pattern
-            ) else {
+            guard
+                let regex = try? NSRegularExpression(
+                    pattern: pattern
+                )
+            else {
                 continue
             }
 

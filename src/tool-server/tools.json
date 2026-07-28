@@ -79,7 +79,7 @@
         "properties": {
           "notification_id": {
             "type": "string",
-            "description": "The exact active reminder notification ID supplied in the system context."
+            "description": "The exact ID of the active reminder notification."
           }
         }
       }
