@@ -2,7 +2,6 @@ import AVFoundation
 import Foundation
 import QuartzCore
 
-
 struct Config {
     static let whisperURL = URL(
         string: "http://127.0.0.1:8081/v1/audio/transcriptions"
@@ -17,6 +16,7 @@ struct Config {
     )!
 
     static let toolServerTimeout: TimeInterval = 5
+    static let notificationPollIntervalSeconds: TimeInterval = 1.0
 
     static let ollamaModel = "qwen3.5:9b"
 
@@ -46,42 +46,57 @@ struct Config {
         "hello",
         "good morning",
         "good afternoon",
-        "good evening"
+        "good evening",
     ]
 
     static let maxHistoryMessages = 10
 
     static let systemPrompt = """
-    # Overview
-    Your name is Atlas. You are a concise, helpful voice assistant that has control over a house via a set of tools. 
-    Without invoking tool calls, you have zero control or knowledge about the house. 
-    Your responses are being spoken aloud to the user in real time.
-    Always reply in natural spoken English. Answer routine questions directly.
-    Never use code blocks or math equations, even if the user requests them.
-    Never use special characters or unusual punctuation. Favor words instead.
-    Use at most two short sentences unless the user explicitly requests detail.
+        # Overview
+        Your name is Atlas. You are a concise, helpful voice assistant that has control over a house via a set of tools. 
+        Without invoking tool calls, you have zero control or knowledge about the house. 
+        Your responses are being spoken aloud to the user in real time.
+        Always reply in natural spoken English. Answer routine questions directly.
+        Never use code blocks or math equations, even if the user requests them.
+        Never use special characters or unusual punctuation. Favor words instead.
+        Use at most two short sentences unless the user explicitly requests detail.
 
-    # Tool Use (Important!)
-    ### Date and time
-    - Use get_current_datetime whenever the user asks for the current time, date,
-    day of week, month, year, or local time.
-    - Never state the current date or time from memory; only report it after a
-    successful get_current_datetime result.
+        # Tool Use (Important!)
+        ### Date and time
+        - Use get_current_datetime whenever the user asks for the current time, date,
+        day of week, month, or year.
+        - Never state the current date or time from memory; only report it after a
+        successful get_current_datetime result.
+        - All dates and times are Pacific time. Never ask for, accept, infer, mention, or send a timezone.
 
-    ### Lights
-    - For any question or request about lights, including their current state,
-    whether they are on or off, or changing their state, you must invoke the
-    appropriate light tool before giving any user-facing answer.
-    - Do not say that you will check, have checked, changed, turned on, turned off,
-    or know the state of any light unless this conversation contains a successful
-    tool result for that exact operation.
-    - For requests about all rooms, invoke the required tool once for each room.
-    - After tool results arrive, give one concise answer based only on those results.
-    - If the user's room is ambiguous, ask which room they mean instead of invoking
-    a tool.
-    """
+        ### Events and reminders
+        - For a reminder expressed as a duration from now, such as “in 30 minutes”
+        or “in two hours,” invoke schedule_event with offset_minutes. Do not
+        calculate a clock time.
+        - For a reminder at a particular calendar date and clock time, invoke
+        schedule_event with date in YYYY-MM-DD format and time in "h:mm AM" or
+        "h:mm PM" format. Always include AM or PM.
+        - Before scheduling a reminder described with a relative calendar date,
+        such as today, tomorrow, Friday, next week, or Monday, call
+        get_current_datetime first. Use its date and day_of_week to produce a
+        concrete YYYY-MM-DD date. Do not guess the date.
+        - Provide exactly one of offset_minutes OR date and time together.
+        - After the tool succeeds, confirm only using the returned date and time
+        value. All spoken times are Pacific time.
+
+        ### Lights
+        - For any question or request about lights, including their current state,
+        whether they are on or off, or changing their state, you must invoke the
+        appropriate light tool before giving any user-facing answer.
+        - Do not say that you will check, have checked, changed, turned on, turned off,
+        or know the state of any light unless this conversation contains a successful
+        tool result for that exact operation.
+        - For requests about all rooms, invoke the required tool once for each room.
+        - After tool results arrive, give one concise answer based only on those results.
+        - If the user's room is ambiguous, ask which room they mean instead of invoking
+        a tool.
+        """
 }
-
 
 struct Message: Codable {
     let role: String
@@ -105,25 +120,76 @@ struct Message: Codable {
     }
 }
 
-
 struct ToolCall: Codable {
     let type: String?
     let function: ToolFunctionCall
 }
 
-
 struct ToolFunctionCall: Codable {
     let index: Int?
     let name: String
-    let arguments: [String: String]
+    let arguments: [String: JSONValue]
 }
 
+enum JSONValue: Codable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode(
+            [String: JSONValue].self
+        ) {
+            self = .object(value)
+        } else if let value = try? container.decode(
+            [JSONValue].self
+        ) {
+            self = .array(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unsupported JSON value."
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .number(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+}
 
 struct ToolDefinition: Codable {
     let type: String
     let function: ToolFunctionDefinition
 }
-
 
 struct ToolFunctionDefinition: Codable {
     let name: String
@@ -131,13 +197,11 @@ struct ToolFunctionDefinition: Codable {
     let parameters: ToolParameters
 }
 
-
 struct ToolParameters: Codable {
     let type: String
     let required: [String]
     let properties: [String: ToolProperty]
 }
-
 
 struct ToolProperty: Codable {
     let type: String
@@ -155,12 +219,31 @@ struct ToolListResponse: Codable {
     let tools: [ToolDefinition]
 }
 
-
 struct ToolExecutionRequest: Codable {
     let name: String
-    let arguments: [String: String]
+    let arguments: [String: JSONValue]
 }
 
+struct PendingNotificationResponse: Codable {
+    let ok: Bool
+    let notification: PendingNotification?
+}
+
+struct PendingNotification: Codable {
+    let id: String
+    let eventId: String
+    let text: String
+    let scheduledForUTC: String
+    let createdAtUTC: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case eventId = "event_id"
+        case text
+        case scheduledForUTC = "scheduled_for_utc"
+        case createdAtUTC = "created_at_utc"
+    }
+}
 
 struct OllamaRequest: Codable {
     let model: String
@@ -177,17 +260,14 @@ struct OllamaRequest: Codable {
     }
 }
 
-
 struct OllamaStreamChunk: Codable {
     let message: Message?
     let done: Bool?
 }
 
-
 struct WhisperResponse: Codable {
     let text: String
 }
-
 
 enum AssistantState: Equatable {
     case listening
@@ -196,11 +276,9 @@ enum AssistantState: Equatable {
     case speaking
 }
 
-
 enum AtlasError: LocalizedError {
     case toolRequiredButNotInvoked
 }
-
 
 final class SentenceAccumulator {
     private var pending = ""
@@ -288,7 +366,6 @@ final class SentenceAccumulator {
         return target
     }
 }
-
 
 final class KokoroWorker {
     private let process = Process()
@@ -378,10 +455,9 @@ final class KokoroWorker {
                 response["ok"] as? Bool == true,
                 FileManager.default.fileExists(atPath: outputURL.path)
             else {
-                let errorMessage = (
-                    try? JSONSerialization.jsonObject(with: responseData)
-                        as? [String: Any]
-                )?["error"] as? String ?? responseLine
+                let errorMessage =
+                    (try? JSONSerialization.jsonObject(with: responseData)
+                    as? [String: Any])?["error"] as? String ?? responseLine
 
                 throw NSError(
                     domain: "Kokoro",
@@ -425,7 +501,6 @@ final class KokoroWorker {
     }
 }
 
-
 final class VoiceAssistant {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -457,6 +532,8 @@ final class VoiceAssistant {
     private var queuedAudioBuffers = 0
     private var conversationActive = false
     private var conversationTimeoutWorkItem: DispatchWorkItem?
+    private var notificationPollingTask: Task<Void, Never>?
+    private var isDeliveringNotification = false
 
     private var history = [
         Message(role: "system", content: Config.systemPrompt)
@@ -464,6 +541,10 @@ final class VoiceAssistant {
 
     init() throws {
         kokoro = try KokoroWorker()
+    }
+
+    deinit {
+        notificationPollingTask?.cancel()
     }
 
     func start() throws {
@@ -514,6 +595,7 @@ final class VoiceAssistant {
 
         engine.prepare()
         try engine.start()
+        startNotificationPolling()
 
         let actualInput = input.outputFormat(forBus: 0)
         let actualOutput = output.inputFormat(forBus: 0)
@@ -749,7 +831,7 @@ final class VoiceAssistant {
             #"(?i)^\s*hello\s+(atlas)[\s,!.:;-]*"#,
             #"(?i)^\s*good\s+morning\s+(atlas)[\s,!.:;-]*"#,
             #"(?i)^\s*good\s+afternoon\s+(atlas)[\s,!.:;-]*"#,
-            #"(?i)^\s*good\s+evening\s+(atlas)[\s,!.:;-]*"#
+            #"(?i)^\s*good\s+evening\s+(atlas)[\s,!.:;-]*"#,
         ]
 
         for pattern in patterns {
@@ -866,13 +948,13 @@ final class VoiceAssistant {
             print()
             print(
                 "[timing] LLM stream complete: "
-                + "\(String(format: "%.3f", elapsed)) s"
+                    + "\(String(format: "%.3f", elapsed)) s"
             )
 
         } catch AtlasError.toolRequiredButNotInvoked {
             let fallback = """
-            Something went wrong with that request. It might be beyond my capabilities. Please try again if you believe it should have worked.
-            """
+                Something went wrong with that request. It might be beyond my capabilities. Please try again if you believe it should have worked.
+                """
             print("\nAtlas: \(fallback)")
             do {
                 try await synthesizeAndQueue(fallback)
@@ -882,6 +964,165 @@ final class VoiceAssistant {
         } catch {
             print("\nPipeline error: \(error.localizedDescription)")
             transitionToListening()
+        }
+    }
+
+    private func startNotificationPolling() {
+        notificationPollingTask?.cancel()
+
+        notificationPollingTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            while !Task.isCancelled {
+                do {
+                    try await self.deliverNextNotificationIfIdle()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    print("[notifications] polling error: \(error.localizedDescription)")
+                    fflush(stdout)
+                }
+
+                do {
+                    try await Task.sleep(
+                        for: .seconds(
+                            Config.notificationPollIntervalSeconds
+                        )
+                    )
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func deliverNextNotificationIfIdle() async throws {
+        let mayDeliver = lock.withLock { () -> Bool in
+            guard state == .listening else {
+                return false
+            }
+
+            guard !isDeliveringNotification else {
+                return false
+            }
+
+            isDeliveringNotification = true
+            return true
+        }
+
+        guard mayDeliver else {
+            return
+        }
+
+        defer {
+            lock.withLock {
+                isDeliveringNotification = false
+            }
+        }
+
+        guard let notification = try await nextPendingNotification() else {
+            return
+        }
+
+        print("\n[notification] \(notification.text)")
+        fflush(stdout)
+
+        do {
+            try await speakNotificationAndWait(
+                notification.text
+            )
+
+            try await acknowledgeNotification(
+                notification.id
+            )
+
+            print("[notification] acknowledged \(notification.id)")
+            fflush(stdout)
+        } catch {
+            print(
+                "[notification] delivery failed for \(notification.id): "
+                    + error.localizedDescription)
+            fflush(stdout)
+        }
+    }
+
+    private func nextPendingNotification() async throws
+        -> PendingNotification?
+    {
+        let url = Config.toolServerURL
+            .appendingPathComponent("notifications")
+            .appendingPathComponent("next")
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = Config.toolServerTimeout
+
+        let (data, response) = try await URLSession.shared.data(
+            for: request
+        )
+
+        guard let http = response as? HTTPURLResponse,
+            (200...299).contains(http.statusCode)
+        else {
+            throw NSError(
+                domain: "ToolServer",
+                code: 10,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not fetch pending notifications."
+                ]
+            )
+        }
+
+        let payload = try JSONDecoder().decode(
+            PendingNotificationResponse.self,
+            from: data
+        )
+
+        guard payload.ok else {
+            throw NSError(
+                domain: "ToolServer",
+                code: 11,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Tool server rejected notification request."
+                ]
+            )
+        }
+
+        return payload.notification
+    }
+
+    private func acknowledgeNotification(
+        _ notificationID: String
+    ) async throws {
+        let url = Config.toolServerURL
+            .appendingPathComponent("notifications")
+            .appendingPathComponent(notificationID)
+            .appendingPathComponent("ack")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Config.toolServerTimeout
+
+        let (data, response) = try await URLSession.shared.data(
+            for: request
+        )
+
+        guard let http = response as? HTTPURLResponse,
+            (200...299).contains(http.statusCode)
+        else {
+            let body = String(decoding: data, as: UTF8.self)
+
+            throw NSError(
+                domain: "ToolServer",
+                code: 12,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not acknowledge notification: \(body)"
+                ]
+            )
         }
     }
 
@@ -905,10 +1146,8 @@ final class VoiceAssistant {
 
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append(
-            (
-                "Content-Disposition: form-data; "
-                + "name=\"file\"; filename=\"utterance.wav\"\r\n"
-            ).data(using: .utf8)!
+            ("Content-Disposition: form-data; "
+                + "name=\"file\"; filename=\"utterance.wav\"\r\n").data(using: .utf8)!
         )
         body.append("Content-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
         body.append(try Data(contentsOf: wavURL))
@@ -953,7 +1192,7 @@ final class VoiceAssistant {
             "light",
             "lights",
             "lamp",
-            "lamps"
+            "lamps",
         ]
 
         let actionWords = [
@@ -966,7 +1205,7 @@ final class VoiceAssistant {
             "check",
             "are",
             "is",
-            "whether"
+            "whether",
         ]
 
         let mentionsLights = lightWords.contains {
@@ -994,10 +1233,10 @@ final class VoiceAssistant {
                     Message(
                         role: "system",
                         content: """
-                        This turn requires tool use. Your next response must contain
-                        tool_calls only, with no user-facing prose, until successful
-                        tool results have been provided.
-                        """
+                            This turn requires tool use. Your next response must contain
+                            tool_calls only, with no user-facing prose, until successful
+                            tool results have been provided.
+                            """
                     )
                 )
             }
@@ -1039,24 +1278,41 @@ final class VoiceAssistant {
 
             let (data, response) = try await URLSession.shared.data(for: request)
 
-            guard
-                let http = response as? HTTPURLResponse,
-                200..<300 ~= http.statusCode
+            guard let http = response as? HTTPURLResponse,
+                (200...299).contains(http.statusCode)
             else {
+                let statusCode =
+                    (response as? HTTPURLResponse)?
+                    .statusCode ?? -1
+
+                let body = String(decoding: data, as: UTF8.self)
+
+                print(
+                    "Ollama tool request failed. "
+                        + "HTTP \(statusCode). Response: \(body)"
+                )
+
                 throw NSError(
                     domain: "Ollama",
                     code: 2,
                     userInfo: [
                         NSLocalizedDescriptionKey:
-                            "Ollama tool request failed."
+                            "Ollama tool request failed with HTTP "
+                            + "\(statusCode)."
                     ]
                 )
             }
 
-            let chunk = try JSONDecoder().decode(
-                OllamaStreamChunk.self,
-                from: data
-            )
+            let chunk: OllamaStreamChunk
+            do {
+                chunk = try JSONDecoder().decode(
+                    OllamaStreamChunk.self,
+                    from: data
+                )
+            } catch {
+                print("Ollama response decode failed: " + String(decoding: data, as: UTF8.self))
+                throw error
+            }
 
             guard let assistantMessage = chunk.message else {
                 throw NSError(
@@ -1108,10 +1364,10 @@ final class VoiceAssistant {
                     Message(
                         role: "user",
                         content: """
-                        Validation failure: you answered a request that needs tool use \
-                        without invoking a tool. Do not write a natural-language answer \
-                        yet. Invoke the necessary tool or tools now.
-                        """
+                            Validation failure: you answered a request that needs tool use \
+                            without invoking a tool. Do not write a natural-language answer \
+                            yet. Invoke the necessary tool or tools now.
+                            """
                     )
                 )
 
@@ -1184,10 +1440,12 @@ final class VoiceAssistant {
             .tools
     }
 
-
-    private func runTool(_ call: ToolCall) async throws -> String {
+    private func runTool(
+        _ call: ToolCall
+    ) async throws -> String {
         let url = Config.toolServerURL
-            .appendingPathComponent("tools/call")
+            .appendingPathComponent("tools")
+            .appendingPathComponent("call")
 
         let payload = ToolExecutionRequest(
             name: call.function.name,
@@ -1197,21 +1455,18 @@ final class VoiceAssistant {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = Config.toolServerTimeout
-
         request.setValue(
             "application/json",
             forHTTPHeaderField: "Content-Type"
         )
-
         request.httpBody = try JSONEncoder().encode(payload)
 
         let (data, response) = try await URLSession.shared.data(
             for: request
         )
 
-        guard
-            let http = response as? HTTPURLResponse,
-            200..<300 ~= http.statusCode
+        guard let http = response as? HTTPURLResponse,
+            (200...299).contains(http.statusCode)
         else {
             let body = String(decoding: data, as: UTF8.self)
 
@@ -1226,6 +1481,7 @@ final class VoiceAssistant {
         }
 
         _ = try JSONSerialization.jsonObject(with: data)
+
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -1234,7 +1490,8 @@ final class VoiceAssistant {
     }
 
     private func synthesizeAndQueue(_ text: String) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
             ttsQueue.async { [weak self] in
                 guard let self else {
                     continuation.resume(
@@ -1257,7 +1514,7 @@ final class VoiceAssistant {
 
                     print(
                         "\n[timing] TTS sentence: "
-                        + "\(String(format: "%.3f", elapsed)) s"
+                            + "\(String(format: "%.3f", elapsed)) s"
                     )
 
                     DispatchQueue.main.async {
@@ -1278,14 +1535,226 @@ final class VoiceAssistant {
         }
     }
 
+    private func speakNotificationAndWait(
+        _ text: String
+    ) async throws {
+        try await withCheckedThrowingContinuation {
+            (
+                continuation: CheckedContinuation<Void, Error>
+            ) in
+            ttsQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(
+                        throwing: NSError(
+                            domain: "Atlas",
+                            code: 40,
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "VoiceAssistant was released."
+                            ]
+                        )
+                    )
+                    return
+                }
+
+                do {
+                    let startedAt = CACurrentMediaTime()
+
+                    let wavURL = try self.kokoro.synthesize(
+                        text: text
+                    )
+
+                    let elapsed = CACurrentMediaTime() - startedAt
+
+                    print(
+                        "[timing] TTS notification: "
+                            + String(format: "%.3f", elapsed)
+                            + " s",
+                    )
+                    fflush(stdout)
+
+                    DispatchQueue.main.async {
+                        do {
+                            try self.queueNotificationWAV(
+                                wavURL: wavURL,
+                                continuation: continuation
+                            )
+                        } catch {
+                            try? FileManager.default.removeItem(
+                                at: wavURL
+                            )
+
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func queueNotificationWAV(
+        wavURL: URL,
+        continuation: CheckedContinuation<Void, Error>
+    ) throws {
+        let file = try AVAudioFile(forReading: wavURL)
+        let sourceFrames = AVAudioFrameCount(file.length)
+
+        guard
+            let sourceBuffer = AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: sourceFrames
+            )
+        else {
+            throw NSError(
+                domain: "Atlas",
+                code: 41,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not allocate notification source buffer."
+                ]
+            )
+        }
+
+        try file.read(into: sourceBuffer)
+
+        guard
+            let converter = AVAudioConverter(
+                from: file.processingFormat,
+                to: voiceFormat
+            )
+        else {
+            throw NSError(
+                domain: "Atlas",
+                code: 42,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not create notification audio converter."
+                ]
+            )
+        }
+
+        let ratio =
+            voiceFormat.sampleRate
+            / file.processingFormat.sampleRate
+
+        let outputCapacity = AVAudioFrameCount(
+            Double(sourceBuffer.frameLength) * ratio + 1
+        )
+
+        guard
+            let outputBuffer = AVAudioPCMBuffer(
+                pcmFormat: voiceFormat,
+                frameCapacity: outputCapacity
+            )
+        else {
+            throw NSError(
+                domain: "Atlas",
+                code: 43,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not allocate notification output buffer."
+                ]
+            )
+        }
+
+        var conversionError: NSError?
+        var sourceConsumed = false
+
+        let status: AVAudioConverterOutputStatus = converter.convert(
+            to: outputBuffer,
+            error: &conversionError
+        ) { _, outStatus in
+            if sourceConsumed {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+
+            sourceConsumed = true
+            outStatus.pointee = .haveData
+            return sourceBuffer
+        }
+
+        guard status != .error, conversionError == nil else {
+            throw conversionError
+                ?? NSError(
+                    domain: "Atlas",
+                    code: 44,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "Notification sample-rate conversion failed."
+                    ]
+                )
+        }
+
+        let didBeginPlayback = lock.withLock { () -> Bool in
+            guard state == .listening else {
+                return false
+            }
+
+            state = .speaking
+            speechFrames = 0
+            silenceFrames = 0
+            queuedAudioBuffers += 1
+            return true
+        }
+
+        guard didBeginPlayback else {
+            throw NSError(
+                domain: "Atlas",
+                code: 46,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Atlas became busy before notification playback began."
+                ]
+            )
+        }
+
+        player.scheduleBuffer(
+            outputBuffer,
+            at: nil,
+            options: []
+        ) { [weak self] in
+            try? FileManager.default.removeItem(at: wavURL)
+
+            DispatchQueue.main.async {
+                guard let self else {
+                    continuation.resume(
+                        throwing: NSError(
+                            domain: "Atlas",
+                            code: 45,
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "VoiceAssistant was released."
+                            ]
+                        )
+                    )
+                    return
+                }
+
+                self.bufferFinished()
+                continuation.resume()
+            }
+        }
+
+        player.volume = 0.9
+
+        if !player.isPlaying {
+            player.play()
+        }
+    }
+
     private func queueWAV(_ wavURL: URL) throws {
         let file = try AVAudioFile(forReading: wavURL)
         let sourceFrames = AVAudioFrameCount(file.length)
 
-        guard let sourceBuffer = AVAudioPCMBuffer(
-            pcmFormat: file.processingFormat,
-            frameCapacity: sourceFrames
-        ) else {
+        guard
+            let sourceBuffer = AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: sourceFrames
+            )
+        else {
             throw NSError(
                 domain: "Atlas",
                 code: 30,
@@ -1298,10 +1767,12 @@ final class VoiceAssistant {
 
         try file.read(into: sourceBuffer)
 
-        guard let converter = AVAudioConverter(
-            from: file.processingFormat,
-            to: voiceFormat
-        ) else {
+        guard
+            let converter = AVAudioConverter(
+                from: file.processingFormat,
+                to: voiceFormat
+            )
+        else {
             throw NSError(
                 domain: "Atlas",
                 code: 31,
@@ -1314,14 +1785,17 @@ final class VoiceAssistant {
 
         let ratio = voiceFormat.sampleRate / file.processingFormat.sampleRate
 
-        let outputCapacity = AVAudioFrameCount(
-            Double(sourceBuffer.frameLength) * ratio
-        ) + 1
+        let outputCapacity =
+            AVAudioFrameCount(
+                Double(sourceBuffer.frameLength) * ratio
+            ) + 1
 
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: voiceFormat,
-            frameCapacity: outputCapacity
-        ) else {
+        guard
+            let outputBuffer = AVAudioPCMBuffer(
+                pcmFormat: voiceFormat,
+                frameCapacity: outputCapacity
+            )
+        else {
             throw NSError(
                 domain: "Atlas",
                 code: 32,
@@ -1350,14 +1824,15 @@ final class VoiceAssistant {
         }
 
         guard status != .error, conversionError == nil else {
-            throw conversionError ?? NSError(
-                domain: "Atlas",
-                code: 33,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "TTS sample-rate conversion failed."
-                ]
-            )
+            throw conversionError
+                ?? NSError(
+                    domain: "Atlas",
+                    code: 33,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "TTS sample-rate conversion failed."
+                    ]
+                )
         }
 
         var shouldCancelConversationTimeout = false
@@ -1429,9 +1904,9 @@ final class VoiceAssistant {
     private func appendToPreRoll(_ pcm: Data) {
         let maxBytes = Int(
             recordingSampleRate
-            * Double(Config.preRollMilliseconds)
-            / 1_000.0
-            * 2.0
+                * Double(Config.preRollMilliseconds)
+                / 1_000.0
+                * 2.0
         )
 
         preRollBuffers.append(pcm)
@@ -1562,13 +2037,12 @@ final class VoiceAssistant {
 
         print(
             "\n[timing] \(label): "
-            + "\(String(format: "%.3f", elapsed)) s"
+                + "\(String(format: "%.3f", elapsed)) s"
         )
 
         return result
     }
 }
-
 
 do {
     let assistant = try VoiceAssistant()

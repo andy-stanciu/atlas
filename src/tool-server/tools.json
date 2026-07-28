@@ -2,8 +2,75 @@
   {
     "type": "function",
     "function": {
+      "name": "schedule_event",
+      "description": "Schedule a one-time event or reminder. Use this when the user asks to set a reminder or schedule an event.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "summary",
+          "message"
+        ],
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Short reminder title."
+          },
+          "message": {
+            "type": "string",
+            "description": "Exact text Atlas should say when the reminder fires."
+          },
+          "offset_minutes": {
+            "type": "integer",
+            "description": "Minutes from now. Use for duration-based reminders."
+          },
+          "date": {
+            "type": "string",
+            "description": "Calendar date, exactly YYYY-MM-DD."
+          },
+          "time": {
+            "type": "string",
+            "description": "12-hour clock time, exactly h:mm AM or h:mm PM."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_scheduled_events",
+      "description": "List all scheduled events. Use this when the user asks about reminders or scheduled events.",
+      "parameters": {
+        "type": "object",
+        "required": [],
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "cancel_scheduled_event",
+      "description": "Cancel a scheduled event by event_id. Use this after identifying the event with list_scheduled_events if the user wants to cancel a reminder or scheduled event.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "event_id"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "The event_id returned by schedule_event or list_scheduled_events."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "get_current_datetime",
-      "description": "Get the current local date, time, day of week, and time zone. Use this for questions about the current time, date, day, month, year, or local time.",
+      "description": "Get the current date, time, and day of week. Use this for questions about the current time, date, day, month, or year.",
       "parameters": {
         "type": "object",
         "required": [],
@@ -18,7 +85,9 @@
       "description": "Get whether the lights in a room are currently on or off. Use this when the user asks about current light status.",
       "parameters": {
         "type": "object",
-        "required": ["room"],
+        "required": [
+          "room"
+        ],
         "properties": {
           "room": {
             "type": "string",
@@ -41,7 +110,10 @@
       "description": "Turn the lights in a room on or off. Use only when the user clearly asks to change the lights. If the user asks to change all rooms, call this tool once for each room.",
       "parameters": {
         "type": "object",
-        "required": ["room", "power"],
+        "required": [
+          "room",
+          "power"
+        ],
         "properties": {
           "room": {
             "type": "string",
