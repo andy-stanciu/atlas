@@ -69,6 +69,25 @@
   {
     "type": "function",
     "function": {
+      "name": "acknowledge_notification",
+      "description": "Acknowledge the active reminder after the user clearly says they completed, handled, dismissed, or no longer wants that reminder.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "notification_id"
+        ],
+        "properties": {
+          "notification_id": {
+            "type": "string",
+            "description": "The exact active reminder notification ID supplied in the system context."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "get_current_datetime",
       "description": "Get the current date, time, and day of week. Use this for questions about the current time, date, day, month, or year.",
       "parameters": {

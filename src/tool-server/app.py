@@ -47,6 +47,7 @@ def create_app() -> Flask:
         tools_file=TOOLS_FILE,
         lights=lights,
         events=event_tools,
+        notifications=notification_service,
     )
 
     app.extensions["event_scheduler"] = scheduler

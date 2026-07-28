@@ -14,10 +14,12 @@ class ToolRegistry:
         tools_file: Path,
         lights: LightService,
         events: EventToolHandlers,
+        notifications: NotificationService,
     ) -> None:
         self._tools = load_tools(tools_file)
         self._lights = lights
         self._events = events
+        self._notifications = notifications
 
     @property
     def definitions(self) -> list[dict]:
@@ -39,6 +41,9 @@ class ToolRegistry:
         if name == "set_light":
             return self._lights.set_power(arguments)
 
+        if name == "acknowledge_notification":
+            return acknowledge_notification(self, arguments)
+
         if self._events.handles(name):
             return self._events.run(name, arguments)
 
@@ -53,6 +58,16 @@ class ToolRegistry:
     def print_light_snapshot(self) -> None:
         self._lights.print_snapshot()
 
+
+def acknowledge_notification(self, arguments: dict) -> dict:
+    notification_id = arguments.get("notification_id")
+    if not isinstance(notification_id, str) or not notification_id.strip():
+        return {
+            "ok": False,
+            "error": "notification_id must be a non-empty string.",
+        }
+
+    return self._notifications.acknowledge(notification_id.strip())
 
 def current_datetime() -> dict:
     now = datetime.now(ZoneInfo("America/Los_Angeles"))
