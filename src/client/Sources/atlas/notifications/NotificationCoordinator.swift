@@ -6,7 +6,7 @@ actor NotificationCoordinator {
     typealias Deliver =
         @Sendable (
             PendingNotification,
-            Bool
+            Int
         ) async throws -> Bool
 
     private let toolServer: ToolServerClient
@@ -97,7 +97,7 @@ actor NotificationCoordinator {
 
         activeReminder = ActiveReminder(
             notification: notification,
-            hasBeenAnnounced: false,
+            announcementCount: 0,
             nextAnnouncementAt: .now,
             isAnnouncementInFlight: false
         )
@@ -124,9 +124,11 @@ actor NotificationCoordinator {
         activeReminder = reminder
 
         do {
+            let announcementNumber = reminder.announcementCount + 1
+
             let completed = try await deliver(
                 reminder.notification,
-                reminder.hasBeenAnnounced
+                announcementNumber
             )
 
             finishDelivery(
@@ -162,7 +164,7 @@ actor NotificationCoordinator {
         reminder.isAnnouncementInFlight = false
 
         if completed {
-            reminder.hasBeenAnnounced = true
+            reminder.announcementCount += 1
 
             reminder.nextAnnouncementAt = Date()
                 .addingTimeInterval(repeatInterval)

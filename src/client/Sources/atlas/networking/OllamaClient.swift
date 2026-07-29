@@ -36,7 +36,8 @@ final class OllamaClient: @unchecked Sendable {
             let http = response as? HTTPURLResponse,
             (200...299).contains(http.statusCode)
         else {
-            let statusCode = (response as? HTTPURLResponse)?
+            let statusCode =
+                (response as? HTTPURLResponse)?
                 .statusCode ?? -1
 
             let body = String(decoding: data, as: UTF8.self)
@@ -87,10 +88,16 @@ final class OllamaClient: @unchecked Sendable {
 
     func generateReminderSpeech(
         text: String,
-        isRepeat: Bool
+        announcementNumber: Int
     ) async throws -> String {
-        let instruction = isRepeat
+        let isRepeat = announcementNumber > 1
+        let instruction =
+            isRepeat
             ? SystemPrompts.reminderRepeatInstruction
+                .replacingOccurrences(
+                    of: "{ANNOUNCEMENT_NUMBER}",
+                    with: String(announcementNumber)
+                )
             : SystemPrompts.reminderAnnouncementInstruction
 
         let response = try await chat(

@@ -14,10 +14,14 @@ enum SystemPrompts {
     static let reminderRepeatInstruction = """
         A previously announced reminder is still unacknowledged.
 
-        Give one brief, polite follow-up based on the supplied reminder text.
-        Ask the user to tell you when it is done. Do not claim it is completed.
-        Do not mention notification IDs, servers, polling, tools, or internal
-        system behavior. Return only words that Atlas should say aloud.
+        This is reminder announcement number {ANNOUNCEMENT_NUMBER} for this
+        reminder. Give one brief, polite follow-up based on the supplied reminder
+        text. Naturally let the user know that this is reminder number
+        {ANNOUNCEMENT_NUMBER}, then ask the user to tell you when it is done.
+
+        Do not claim it is completed. Do not mention notification IDs, servers,
+        polling, tools, or internal system behavior. Return only words that Atlas
+        should say aloud.
         """
 
     static let activeReminderResponseInstruction = """

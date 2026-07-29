@@ -23,7 +23,7 @@ struct PendingNotification: Codable, Equatable {
 
 struct ActiveReminder: Equatable {
     let notification: PendingNotification
-    var hasBeenAnnounced: Bool
+    var announcementCount: Int
     var nextAnnouncementAt: Date
     var isAnnouncementInFlight: Bool
 }

@@ -135,14 +135,14 @@ final class VoiceAssistant {
             isIdle: { [weak self] in
                 self?.isAvailableForReminderDelivery() ?? false
             },
-            deliver: { [weak self] notification, isRepeat in
+            deliver: { [weak self] notification, announcementNumber in
                 guard let self else {
                     return false
                 }
 
                 let speech = try await self.ollama.generateReminderSpeech(
                     text: notification.text,
-                    isRepeat: isRepeat
+                    announcementNumber: announcementNumber
                 )
 
                 guard !speech.isEmpty else {
@@ -150,7 +150,8 @@ final class VoiceAssistant {
                 }
 
                 print(
-                    "\n[reminder] \(notification.text)"
+                    "\n[reminder \(announcementNumber)] "
+                        + notification.text
                 )
                 print(
                     "Atlas: \(speech)"
@@ -487,6 +488,7 @@ final class VoiceAssistant {
         }
 
         print("\nAtlas is listening for your reminder response.")
+        resetConversationTimeout()
     }
 
     private func resetConversationTimeout() {
