@@ -16,3 +16,5 @@ src/tool-server/data/
 # Swift
 .build/
 argmax-oss-swift/
+dump_directory.py
+directory_dump.txt
