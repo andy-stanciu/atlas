@@ -1,4 +1,5 @@
 from .service import EventService, EventValidationError
+from tools.time import current_datetime_payload
 
 
 class EventToolHandlers:
@@ -27,6 +28,7 @@ class EventToolHandlers:
             return {
                 "ok": False,
                 "error": str(error),
+                "current_datetime": current_datetime_payload()
             }
 
         return {

@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -7,6 +6,7 @@ from events.notifications import NotificationService
 from events.tool_handlers import EventToolHandlers
 
 from .lights import LightService
+from .time import current_datetime, current_datetime_payload
 
 
 PACIFIC_TIMEZONE = ZoneInfo("America/Los_Angeles")
@@ -74,23 +74,12 @@ class ToolRegistry:
                 "error": (
                     "notification_id must be a non-empty string."
                 ),
+                "current_datetime": current_datetime_payload(),
             }
 
         return self._notifications.acknowledge(
             notification_id.strip()
         )
-
-
-def current_datetime() -> dict:
-    now = datetime.now(PACIFIC_TIMEZONE)
-
-    return {
-        "ok": True,
-        "date": now.strftime("%Y-%m-%d"),
-        "time": now.strftime("%-I:%M %p"),
-        "day_of_week": now.strftime("%A"),
-    }
-
 
 def load_tools(tools_file: Path) -> list[dict]:
     try:

@@ -1,16 +1,17 @@
 import Foundation
 
 actor NotificationCoordinator {
-    typealias IsIdle = @Sendable () async -> Bool
+    typealias DeliveryContext = @Sendable () async -> Bool?
 
     typealias Deliver =
         @Sendable (
             PendingNotification,
-            Int
+            Int,
+            Bool
         ) async throws -> Bool
 
     private let toolServer: ToolServerClient
-    private let isIdle: IsIdle
+    private let deliveryContext: DeliveryContext
     private let deliver: Deliver
     private let pollInterval: TimeInterval
     private let repeatInterval: TimeInterval
@@ -22,13 +23,13 @@ actor NotificationCoordinator {
         toolServer: ToolServerClient,
         pollInterval: TimeInterval,
         repeatInterval: TimeInterval,
-        isIdle: @escaping IsIdle,
+        deliveryContext: @escaping DeliveryContext,
         deliver: @escaping Deliver
     ) {
         self.toolServer = toolServer
         self.pollInterval = pollInterval
         self.repeatInterval = repeatInterval
-        self.isIdle = isIdle
+        self.deliveryContext = deliveryContext
         self.deliver = deliver
     }
 
@@ -116,7 +117,7 @@ actor NotificationCoordinator {
             return
         }
 
-        guard await isIdle() else {
+        guard let wasConversationActive = await deliveryContext() else {
             return
         }
 
@@ -128,7 +129,8 @@ actor NotificationCoordinator {
 
             let completed = try await deliver(
                 reminder.notification,
-                announcementNumber
+                announcementNumber,
+                wasConversationActive
             )
 
             finishDelivery(

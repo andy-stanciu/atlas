@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from .models import ActionType, EventStatus, ScheduledEvent
 from .repository import EventRepository
+from tools.time import current_datetime_payload
 
 
 DEFAULT_TIMEZONE = "America/Los_Angeles"
@@ -44,6 +45,7 @@ class EventService:
                 event_to_response(event)
                 for event in self._repository.list_events(include_history=include_history)
             ],
+            "current_datetime": current_datetime_payload(),
         }
 
     def list_events_for_tool(self, arguments: dict) -> dict:
@@ -64,7 +66,8 @@ class EventService:
             return {
                 "ok": False,
                 "error": (
-                    "Event was not found or is no longer scheduled."
+                    "Event was not found or is no longer scheduled. "
+                    "If the event has already fired, it can no longer be canceled."
                 ),
             }
 
@@ -72,6 +75,7 @@ class EventService:
             "ok": True,
             "event_id": event_id,
             "status": EventStatus.CANCELLED.value,
+            "current_datetime": current_datetime_payload(),
         }
 
 
@@ -88,6 +92,7 @@ def event_to_response(event: ScheduledEvent) -> dict:
         "status": event.status.value,
         "date": pacific_time.strftime("%Y-%m-%d"),
         "time": pacific_time.strftime("%-I:%M %p"),
+        "current_datetime": current_datetime_payload(),
     }
 
 

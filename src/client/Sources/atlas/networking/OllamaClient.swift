@@ -11,8 +11,8 @@ final class OllamaClient: @unchecked Sendable {
             think: false,
             messages: messages,
             options: .init(
-                num_ctx: 4096,
-                temperature: 0.1,
+                num_ctx: 8192,
+                temperature: 0.2,
                 num_predict: 400
             ),
             tools: tools
@@ -88,10 +88,12 @@ final class OllamaClient: @unchecked Sendable {
 
     func generateReminderSpeech(
         text: String,
-        announcementNumber: Int
+        announcementNumber: Int,
+        isConversationInterruption: Bool
     ) async throws -> String {
         let isRepeat = announcementNumber > 1
-        let instruction =
+
+        let reminderInstruction =
             isRepeat
             ? SystemPrompts.reminderRepeatInstruction
                 .replacingOccurrences(
@@ -99,6 +101,17 @@ final class OllamaClient: @unchecked Sendable {
                     with: String(announcementNumber)
                 )
             : SystemPrompts.reminderAnnouncementInstruction
+
+        let instruction: String
+
+        if isConversationInterruption {
+            instruction =
+                SystemPrompts.reminderConversationInterruptionInstruction
+                + "\n\n"
+                + reminderInstruction
+        } else {
+            instruction = reminderInstruction
+        }
 
         let response = try await chat(
             messages: [
@@ -118,8 +131,18 @@ final class OllamaClient: @unchecked Sendable {
             tools: []
         )
 
-        return response.content.trimmingCharacters(
+        let speech = response.content.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
+
+        guard !speech.isEmpty else {
+            return ""
+        }
+
+        if isConversationInterruption {
+            return "By the way, \(speech)"
+        }
+
+        return speech
     }
 }

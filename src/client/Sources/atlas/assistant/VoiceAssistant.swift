@@ -132,17 +132,18 @@ final class VoiceAssistant {
             toolServer: toolServer,
             pollInterval: Config.notificationPollIntervalSeconds,
             repeatInterval: Config.reminderRepeatIntervalSeconds,
-            isIdle: { [weak self] in
-                self?.isAvailableForReminderDelivery() ?? false
+            deliveryContext: { [weak self] in
+                self?.reminderDeliveryContext()
             },
-            deliver: { [weak self] notification, announcementNumber in
+            deliver: { [weak self] notification, announcementNumber, wasConversationActive in
                 guard let self else {
                     return false
                 }
 
                 let speech = try await self.ollama.generateReminderSpeech(
                     text: notification.text,
-                    announcementNumber: announcementNumber
+                    announcementNumber: announcementNumber,
+                    isConversationInterruption: wasConversationActive
                 )
 
                 guard !speech.isEmpty else {
@@ -163,7 +164,7 @@ final class VoiceAssistant {
                     purpose: .reminder
                 )
 
-                if result.completed {
+                if result.completed && !wasConversationActive {
                     self.beginReminderConversation()
                 }
 
@@ -176,11 +177,17 @@ final class VoiceAssistant {
         }
     }
 
-    private func isAvailableForReminderDelivery() -> Bool {
+    private func reminderDeliveryContext() -> Bool? {
         lock.withLock {
-            state == .listening
-                && queuedAudioBuffers == 0
-                && !conversationActive
+            guard state == .listening else {
+                return nil
+            }
+
+            guard queuedAudioBuffers == 0 else {
+                return nil
+            }
+
+            return conversationActive
         }
     }
 
@@ -213,7 +220,9 @@ final class VoiceAssistant {
     }
 
     private func beginReminderPlayback() -> Bool {
-        lock.withLock {
+        var shouldCancelTimeout = false
+
+        let didBegin = lock.withLock { () -> Bool in
             guard state == .listening else {
                 return false
             }
@@ -222,17 +231,20 @@ final class VoiceAssistant {
                 return false
             }
 
-            guard !conversationActive else {
-                return false
-            }
-
             state = .speaking
             speechFrames = 0
             silenceFrames = 0
             queuedAudioBuffers = 1
 
+            shouldCancelTimeout = conversationActive
             return true
         }
+
+        if shouldCancelTimeout {
+            cancelConversationTimeout()
+        }
+
+        return didBegin
     }
 
     private func bufferFinished() {
@@ -373,6 +385,7 @@ final class VoiceAssistant {
         pcm: Data,
         sampleRate: Double
     ) async {
+        var debugUserText = "<speech was not transcribed>"
         do {
             let wavURL = try writeTemporaryWAV(
                 pcm: pcm,
@@ -395,6 +408,7 @@ final class VoiceAssistant {
 
             let active = lock.withLock { conversationActive }
             var userText = transcript
+            debugUserText = userText
 
             if !active {
                 guard isWakeGreeting(transcript) else {
@@ -410,6 +424,7 @@ final class VoiceAssistant {
                 if userText.isEmpty {
                     userText = "Hello"
                 }
+                debugUserText = userText
             } else {
                 cancelConversationTimeout()
             }
@@ -454,10 +469,47 @@ final class VoiceAssistant {
                 "Something went wrong with that request. "
                 + "Please try again."
 
+            print(
+                """
+
+                [pipeline error]
+                type: AtlasError.toolRequiredButNotInvoked
+                user text: \(debugUserText)
+                reason: Tool-loop validation rejected the model response twice.
+                """
+            )
+            fflush(stdout)
+
             print("\nAtlas: \(fallback)")
-            try? await playback.queueNormalSpeech(fallback)
+
+            do {
+                try await playback.queueNormalSpeech(fallback)
+            } catch {
+                print(
+                    "[pipeline fallback TTS error] "
+                        + String(describing: error)
+                )
+                fflush(stdout)
+            }
+
+            transitionToListening()
+
         } catch {
-            print("\nPipeline error: \(error.localizedDescription)")
+            let nsError = error as NSError
+
+            print(
+                """
+
+                [pipeline error]
+                type: \(String(reflecting: type(of: error)))
+                domain: \(nsError.domain)
+                code: \(nsError.code)
+                description: \(nsError.localizedDescription)
+                userInfo: \(nsError.userInfo)
+                """
+            )
+            fflush(stdout)
+
             transitionToListening()
         }
     }
