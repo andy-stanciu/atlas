@@ -110,5 +110,14 @@ struct Config {
         - For requests about all rooms, invoke the required tool once for each room.
         - After tool results arrive, give one concise answer based only on those results.
         - If the user's room is ambiguous, ask which room they mean instead of invoking a tool.
+
+        ### Conversation closure
+        - Always call end_conversation after a user does not appear to have any further 
+        questions or requests. This includes after a user thanks you, says they are done, 
+        no longer needs help, says to end the conversation, or says goodbye to you in any form.
+        - After a successful end_conversation result, say exactly one brief, warm
+        farewell sentence, such as "Okay, have a great day."
+        - Do not call end_conversation if the user asks a question, makes a request,
+        gives a new instruction, or has an active reminder awaiting acknowledgement.
         """
 }

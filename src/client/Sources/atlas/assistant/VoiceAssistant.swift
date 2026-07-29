@@ -40,6 +40,7 @@ final class VoiceAssistant {
 
     private var conversationActive = false
     private var conversationTimeoutWorkItem: DispatchWorkItem?
+    private var shouldEndConversationAfterSpeech = false
 
     var history = [
         Message(role: "system", content: Config.systemPrompt)
@@ -259,6 +260,7 @@ final class VoiceAssistant {
 
     private func bufferFinished() {
         var shouldStartTimeout = false
+        var shouldEndConversation = false
 
         lock.withLock {
             queuedAudioBuffers = max(0, queuedAudioBuffers - 1)
@@ -267,11 +269,19 @@ final class VoiceAssistant {
                 state = .listening
                 speechFrames = 0
                 silenceFrames = 0
-                shouldStartTimeout = conversationActive
+
+                if shouldEndConversationAfterSpeech {
+                    shouldEndConversationAfterSpeech = false
+                    shouldEndConversation = true
+                } else {
+                    shouldStartTimeout = conversationActive
+                }
             }
         }
 
-        if shouldStartTimeout {
+        if shouldEndConversation {
+            endConversation()
+        } else if shouldStartTimeout {
             resetConversationTimeout()
         }
     }
@@ -297,6 +307,7 @@ final class VoiceAssistant {
         var completedSampleRate: Double?
         var shouldStopPlayback = false
         var shouldCancelTimeout = false
+        var shouldCancelScheduledConversationEnd = false
 
         lock.lock()
 
@@ -351,6 +362,9 @@ final class VoiceAssistant {
                 speechFrames = 0
                 clearPreRoll()
                 shouldStopPlayback = true
+                shouldCancelScheduledConversationEnd =
+                    shouldEndConversationAfterSpeech
+                shouldEndConversationAfterSpeech = false
             }
 
         case .processing:
@@ -374,6 +388,9 @@ final class VoiceAssistant {
 
                 self.lock.withLock {
                     self.queuedAudioBuffers = 0
+                    if shouldCancelScheduledConversationEnd {
+                        self.shouldEndConversationAfterSpeech = false
+                    }
                 }
 
                 print("\nInterrupted. Listening...", terminator: "")
@@ -526,6 +543,7 @@ final class VoiceAssistant {
 
     private func beginConversation() {
         lock.withLock {
+            shouldEndConversationAfterSpeech = false
             conversationActive = true
             conversationTimeoutWorkItem?.cancel()
             conversationTimeoutWorkItem = nil
@@ -540,6 +558,7 @@ final class VoiceAssistant {
 
     private func beginReminderConversation() {
         lock.withLock {
+            shouldEndConversationAfterSpeech = false
             conversationActive = true
             conversationTimeoutWorkItem?.cancel()
             conversationTimeoutWorkItem = nil
@@ -551,6 +570,14 @@ final class VoiceAssistant {
 
         print("\nAtlas is listening for your reminder response.")
         resetConversationTimeout()
+    }
+
+    func scheduleConversationEndAfterSpeech() {
+        lock.withLock {
+            shouldEndConversationAfterSpeech = true
+            conversationTimeoutWorkItem?.cancel()
+            conversationTimeoutWorkItem = nil
+        }
     }
 
     private func resetConversationTimeout() {
@@ -575,6 +602,7 @@ final class VoiceAssistant {
                 return false
             }
 
+            shouldEndConversationAfterSpeech = false
             conversationActive = false
             conversationTimeoutWorkItem?.cancel()
             conversationTimeoutWorkItem = nil
@@ -600,6 +628,7 @@ final class VoiceAssistant {
 
     private func transitionToListening() {
         lock.withLock {
+            shouldEndConversationAfterSpeech = false
             state = .listening
             recording = Data()
             speechFrames = 0
@@ -658,6 +687,11 @@ final class VoiceAssistant {
     func normalizedText(_ text: String) -> String {
         text
             .lowercased()
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "’", with: "")
+            .replacingOccurrences(of: "‘", with: "")
+            .replacingOccurrences(of: "ʼ", with: "")
+            .replacingOccurrences(of: "＇", with: "")
             .replacingOccurrences(
                 of: #"[^a-z\s]"#,
                 with: " ",
