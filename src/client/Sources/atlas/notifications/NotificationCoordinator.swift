@@ -2,12 +2,14 @@ import Foundation
 
 actor NotificationCoordinator {
     typealias DeliveryContext = @Sendable () async -> Bool?
+    typealias ReminderStarted = @Sendable () async -> Void
 
     typealias Deliver =
         @Sendable (
             PendingNotification,
             Int,
-            Bool
+            Bool,
+            @escaping ReminderStarted
         ) async throws -> Bool
 
     private let toolServer: ToolServerClient
@@ -17,6 +19,7 @@ actor NotificationCoordinator {
     private let repeatInterval: TimeInterval
 
     private var activeReminder: ActiveReminder?
+    private var acknowledgementEligibleNotificationID: String?
     private var pollingTask: Task<Void, Never>?
 
     init(
@@ -48,8 +51,23 @@ actor NotificationCoordinator {
         pollingTask = nil
     }
 
-    func activeReminderSnapshot() -> PendingNotification? {
-        activeReminder?.notification
+    func acknowledgementEligibleReminderSnapshot() -> PendingNotification? {
+        guard
+            let reminder = activeReminder,
+            acknowledgementEligibleNotificationID == reminder.notification.id
+        else {
+            return nil
+        }
+
+        return reminder.notification
+    }
+
+    func markAnnouncementStarted(notificationID: String) {
+        guard activeReminder?.notification.id == notificationID else {
+            return
+        }
+
+        acknowledgementEligibleNotificationID = notificationID
     }
 
     func markAcknowledged(notificationID: String) {
@@ -57,6 +75,7 @@ actor NotificationCoordinator {
             return
         }
 
+        acknowledgementEligibleNotificationID = nil
         activeReminder = nil
     }
 
@@ -95,7 +114,7 @@ actor NotificationCoordinator {
         else {
             return
         }
-
+        acknowledgementEligibleNotificationID = nil
         activeReminder = ActiveReminder(
             notification: notification,
             announcementCount: 0,
@@ -126,11 +145,16 @@ actor NotificationCoordinator {
 
         do {
             let announcementNumber = reminder.announcementCount + 1
-
+            let notificationID = reminder.notification.id
             let completed = try await deliver(
                 reminder.notification,
                 announcementNumber,
-                wasConversationActive
+                wasConversationActive,
+                { [weak self] in
+                    await self?.markAnnouncementStarted(
+                        notificationID: notificationID
+                    )
+                }
             )
 
             finishDelivery(
@@ -172,7 +196,7 @@ actor NotificationCoordinator {
                 .addingTimeInterval(repeatInterval)
         } else {
             reminder.nextAnnouncementAt = Date()
-                .addingTimeInterval(10)
+                .addingTimeInterval(pollInterval)
         }
 
         activeReminder = reminder

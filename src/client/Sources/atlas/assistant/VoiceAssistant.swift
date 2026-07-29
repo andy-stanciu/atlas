@@ -135,7 +135,12 @@ final class VoiceAssistant {
             deliveryContext: { [weak self] in
                 self?.reminderDeliveryContext()
             },
-            deliver: { [weak self] notification, announcementNumber, wasConversationActive in
+            deliver: {
+                [weak self]
+                notification,
+                announcementNumber,
+                wasConversationActive,
+                onStarted in
                 guard let self else {
                     return false
                 }
@@ -150,23 +155,28 @@ final class VoiceAssistant {
                     return false
                 }
 
-                print(
-                    "\n[reminder \(announcementNumber)] "
-                        + notification.text
-                )
-                print(
-                    "Atlas: \(speech)"
-                )
-                fflush(stdout)
-
                 let result = try await self.playback.speak(
                     speech,
-                    purpose: .reminder
-                )
+                    purpose: .reminder,
+                    onStarted: { [weak self] in
+                        guard let self else {
+                            return
+                        }
 
-                if result.completed && !wasConversationActive {
-                    self.beginReminderConversation()
-                }
+                        print(
+                            "\n[reminder \(announcementNumber)] "
+                                + notification.text
+                        )
+                        print("Atlas: \(speech)")
+                        fflush(stdout)
+
+                        if !wasConversationActive {
+                            self.beginReminderConversation()
+                        }
+
+                        await onStarted()
+                    }
+                )
 
                 return result.completed
             }

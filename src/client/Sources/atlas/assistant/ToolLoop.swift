@@ -6,7 +6,8 @@ extension VoiceAssistant {
         onSentence: @escaping (String) async throws -> Void
     ) async throws -> String {
         let mayRequireTool = mayRequireLightTool(userText)
-        let activeReminder = await notificationCoordinator?.activeReminderSnapshot()
+        let activeReminder = await notificationCoordinator?
+            .acknowledgementEligibleReminderSnapshot()
 
         var messages = lock.withLock { () -> [Message] in
             var updated = history

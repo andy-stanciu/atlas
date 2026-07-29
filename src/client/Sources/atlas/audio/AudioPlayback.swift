@@ -63,7 +63,8 @@ final class AudioPlayback: @unchecked Sendable {
 
     func speak(
         _ text: String,
-        purpose: SpeechPurpose
+        purpose: SpeechPurpose,
+        onStarted: @escaping @Sendable () async -> Void
     ) async throws -> SpeechPlaybackResult {
         let wavURL = try await synthesize(text)
 
@@ -89,7 +90,8 @@ final class AudioPlayback: @unchecked Sendable {
                 do {
                     try self.playReminderWAV(
                         wavURL,
-                        continuation: continuation
+                        continuation: continuation,
+                        onStarted: onStarted
                     )
                 } catch {
                     try? FileManager.default.removeItem(at: wavURL)
@@ -149,7 +151,8 @@ final class AudioPlayback: @unchecked Sendable {
 
     private func playReminderWAV(
         _ wavURL: URL,
-        continuation: CheckedContinuation<SpeechPlaybackResult, Error>
+        continuation: CheckedContinuation<SpeechPlaybackResult, Error>,
+        onStarted: @escaping @Sendable () async -> Void
     ) throws {
         let outputBuffer = try makeOutputBuffer(from: wavURL)
 
@@ -189,6 +192,10 @@ final class AudioPlayback: @unchecked Sendable {
 
         if !player.isPlaying {
             player.play()
+        }
+
+        Task {
+            await onStarted()
         }
     }
 
