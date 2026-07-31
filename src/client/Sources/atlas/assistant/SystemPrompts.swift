@@ -11,6 +11,12 @@ enum SystemPrompts {
         words that Atlas should say aloud.
         """
 
+    static let notificationAnnouncementInstruction = """
+        Speak the supplied notification text naturally and briefly.
+        Do not say it is a reminder, ask for acknowledgement, ask the user to respond,
+        or mention tools or internal behavior. Return only words Atlas should say aloud.
+        """
+
     static let reminderRepeatInstruction = """
         A previously announced reminder is still unacknowledged.
 

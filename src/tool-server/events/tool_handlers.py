@@ -16,7 +16,7 @@ class EventToolHandlers:
     def run(self, name: str, arguments: dict) -> dict:
         try:
             if name == "schedule_event":
-                return self._event_service.schedule_one_time_reminder(arguments)
+                return self._event_service.schedule_one_time_event(arguments)
 
             if name == "list_scheduled_events":
                 return self._event_service.list_events_for_tool(arguments)

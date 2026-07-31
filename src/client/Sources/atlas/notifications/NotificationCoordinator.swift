@@ -2,14 +2,14 @@ import Foundation
 
 actor NotificationCoordinator {
     typealias DeliveryContext = @Sendable () async -> Bool?
-    typealias ReminderStarted = @Sendable () async -> Void
+    typealias AnnouncementStarted = @Sendable () async -> Void
 
     typealias Deliver =
         @Sendable (
             PendingNotification,
             Int,
             Bool,
-            @escaping ReminderStarted
+            @escaping AnnouncementStarted
         ) async throws -> Bool
 
     private let toolServer: ToolServerClient
@@ -19,7 +19,7 @@ actor NotificationCoordinator {
     private let repeatInterval: TimeInterval
 
     private var activeReminder: ActiveReminder?
-    private var acknowledgementEligibleNotificationID: String?
+    private var oneShotDeliveryInFlight = false
     private var pollingTask: Task<Void, Never>?
 
     init(
@@ -52,10 +52,11 @@ actor NotificationCoordinator {
     }
 
     func acknowledgementEligibleReminderSnapshot() -> PendingNotification? {
-        guard
-            let reminder = activeReminder,
-            acknowledgementEligibleNotificationID == reminder.notification.id
-        else {
+        guard let reminder = activeReminder else {
+            return nil
+        }
+
+        guard reminder.notification.kind == .reminder else {
             return nil
         }
 
@@ -63,19 +64,23 @@ actor NotificationCoordinator {
     }
 
     func markAnnouncementStarted(notificationID: String) {
-        guard activeReminder?.notification.id == notificationID else {
+        guard
+            let reminder = activeReminder,
+            reminder.notification.id == notificationID,
+            reminder.notification.kind == .reminder
+        else {
             return
         }
-
-        acknowledgementEligibleNotificationID = notificationID
     }
 
     func markAcknowledged(notificationID: String) {
-        guard activeReminder?.notification.id == notificationID else {
+        guard
+            let reminder = activeReminder,
+            reminder.notification.id == notificationID,
+            reminder.notification.kind == .reminder
+        else {
             return
         }
-
-        acknowledgementEligibleNotificationID = nil
         activeReminder = nil
     }
 
@@ -86,7 +91,7 @@ actor NotificationCoordinator {
     private func run() async {
         while !Task.isCancelled {
             do {
-                try await acquireReminderIfNeeded()
+                try await acquireNotificationIfNeeded()
                 await deliverReminderIfDue()
             } catch is CancellationError {
                 return
@@ -105,8 +110,12 @@ actor NotificationCoordinator {
         }
     }
 
-    private func acquireReminderIfNeeded() async throws {
+    private func acquireNotificationIfNeeded() async throws {
         guard activeReminder == nil else {
+            return
+        }
+
+        guard !oneShotDeliveryInFlight else {
             return
         }
 
@@ -114,17 +123,72 @@ actor NotificationCoordinator {
         else {
             return
         }
-        acknowledgementEligibleNotificationID = nil
-        activeReminder = ActiveReminder(
-            notification: notification,
-            announcementCount: 0,
-            nextAnnouncementAt: .now,
-            isAnnouncementInFlight: false
-        )
+
+        switch notification.kind {
+        case .reminder:
+            activeReminder = ActiveReminder(
+                notification: notification,
+                announcementCount: 0,
+                nextAnnouncementAt: .now,
+                isAnnouncementInFlight: false
+            )
+
+        case .confirmation:
+            await deliverOneShot(notification)
+        }
+    }
+
+    private func deliverOneShot(
+        _ notification: PendingNotification
+    ) async {
+        guard notification.kind == .confirmation else {
+            return
+        }
+        guard !oneShotDeliveryInFlight else {
+            return
+        }
+
+        guard let wasConversationActive = await deliveryContext() else {
+            return
+        }
+
+        oneShotDeliveryInFlight = true
+
+        defer {
+            oneShotDeliveryInFlight = false
+        }
+
+        do {
+            let completed = try await deliver(
+                notification,
+                1,
+                wasConversationActive,
+                {}
+            )
+
+            guard completed else {
+                return
+            }
+
+            try await toolServer.markNotificationDelivered(
+                notificationID: notification.id
+            )
+        } catch {
+            print(
+                "[notifications] one-shot delivery failed for "
+                    + "\(notification.id): "
+                    + error.localizedDescription
+            )
+        }
     }
 
     private func deliverReminderIfDue() async {
         guard var reminder = activeReminder else {
+            return
+        }
+
+        guard reminder.notification.kind == .reminder else {
+            activeReminder = nil
             return
         }
 
@@ -146,6 +210,7 @@ actor NotificationCoordinator {
         do {
             let announcementNumber = reminder.announcementCount + 1
             let notificationID = reminder.notification.id
+
             let completed = try await deliver(
                 reminder.notification,
                 announcementNumber,
@@ -157,25 +222,25 @@ actor NotificationCoordinator {
                 }
             )
 
-            finishDelivery(
-                notificationID: reminder.notification.id,
+            finishReminderDelivery(
+                notificationID: notificationID,
                 completed: completed
             )
         } catch {
             print(
-                "[notifications] delivery failed for "
+                "[notifications] reminder delivery failed for "
                     + "\(reminder.notification.id): "
                     + error.localizedDescription
             )
 
-            finishDelivery(
+            finishReminderDelivery(
                 notificationID: reminder.notification.id,
                 completed: false
             )
         }
     }
 
-    private func finishDelivery(
+    private func finishReminderDelivery(
         notificationID: String,
         completed: Bool
     ) {

@@ -3,33 +3,75 @@
     "type": "function",
     "function": {
       "name": "schedule_event",
-      "description": "Schedule a one-time event or reminder. Use this when the user asks to set a reminder or schedule an event.",
+      "description": "Schedule a future event or routine. Actions run in order. Use voice_notification only for a reminder that the user must acknowledge; use set_light for a future light change. Provide offset_minutes OR date and time, never both.",
       "parameters": {
         "type": "object",
         "required": [
           "summary",
-          "message"
+          "actions"
         ],
         "properties": {
           "summary": {
             "type": "string",
-            "description": "Short reminder title."
-          },
-          "message": {
-            "type": "string",
-            "description": "Exact text Atlas should say when the reminder fires."
+            "description": "Short event or routine title."
           },
           "offset_minutes": {
             "type": "integer",
-            "description": "Minutes from now. Use for duration-based reminders."
+            "description": "Whole number of minutes from now."
           },
           "date": {
             "type": "string",
-            "description": "Calendar date, exactly YYYY-MM-DD."
+            "description": "Future date: YYYY-MM-DD. Requires time parameter."
           },
           "time": {
             "type": "string",
-            "description": "12-hour clock time, exactly h:mm AM or h:mm PM."
+            "description": "Future time: h:mm AM or h:mm PM. Requires date parameter."
+          },
+          "actions": {
+            "type": "array",
+            "description": "Non-empty array of actions in execution order. Each action has type: voice_notification or set_light. voice_notification needs text. set_light needs room and power. confirmation_message is spoken after a successful set_light, and should be used if the user asks for confirmation.",
+            "items": {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "voice_notification",
+                    "set_light"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Required for voice_notification: exact words to say."
+                },
+                "room": {
+                  "type": "string",
+                  "enum": [
+                    "kitchen",
+                    "living_room",
+                    "office",
+                    "bathroom",
+                    "bedroom"
+                  ],
+                  "description": "Required for set_light."
+                },
+                "power": {
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "description": "Required for set_light."
+                },
+                "confirmation_message": {
+                  "type": "string",
+                  "description": "Optional spoken confirmation for set_light. Include only if requested."
+                }
+              }
+            }
           }
         }
       }
@@ -39,10 +81,9 @@
     "type": "function",
     "function": {
       "name": "list_scheduled_events",
-      "description": "List all scheduled events. Use this when the user asks about reminders or scheduled events.",
+      "description": "List upcoming scheduled events. Use before cancelling when the event ID is unknown.",
       "parameters": {
         "type": "object",
-        "required": [],
         "properties": {}
       }
     }
@@ -51,7 +92,7 @@
     "type": "function",
     "function": {
       "name": "cancel_scheduled_event",
-      "description": "Cancel a scheduled event by event_id. Use this after identifying the event with list_scheduled_events if the user wants to cancel a reminder or scheduled event.",
+      "description": "Cancel an upcoming event by its exact event_id.",
       "parameters": {
         "type": "object",
         "required": [
@@ -60,7 +101,7 @@
         "properties": {
           "event_id": {
             "type": "string",
-            "description": "The event_id returned by schedule_event or list_scheduled_events."
+            "description": "Exact ID from schedule_event or list_scheduled_events."
           }
         }
       }
@@ -70,7 +111,7 @@
     "type": "function",
     "function": {
       "name": "acknowledge_notification",
-      "description": "Acknowledge the active reminder after the user clearly says they completed, handled, dismissed, or no longer wants that reminder.",
+      "description": "Acknowledge an active notification only after the user clearly completes, dismisses, or cancels it.",
       "parameters": {
         "type": "object",
         "required": [
@@ -79,7 +120,7 @@
         "properties": {
           "notification_id": {
             "type": "string",
-            "description": "The exact ID of the active reminder notification."
+            "description": "Exact active notification ID."
           }
         }
       }
@@ -92,7 +133,6 @@
       "description": "Get the current date, time, and day of week. Use this for questions about the current time, date, day, month, or year.",
       "parameters": {
         "type": "object",
-        "required": [],
         "properties": {}
       }
     }
@@ -101,7 +141,7 @@
     "type": "function",
     "function": {
       "name": "get_light_status",
-      "description": "Get whether the lights in a room are currently on or off. Use this when the user asks about current light status.",
+      "description": "Get the current on or off state of one room's lights.",
       "parameters": {
         "type": "object",
         "required": [
@@ -110,11 +150,11 @@
         "properties": {
           "room": {
             "type": "string",
-            "description": "The room containing the lights.",
             "enum": [
               "kitchen",
               "living_room",
               "office",
+              "bathroom",
               "bedroom"
             ]
           }
@@ -126,7 +166,7 @@
     "type": "function",
     "function": {
       "name": "set_light",
-      "description": "Turn the lights in a room on or off. Use only when the user clearly asks to change the lights. If the user asks to change all rooms, call this tool once for each room.",
+      "description": "Immediately turn one room's lights on or off. For a future light action, use schedule_event.",
       "parameters": {
         "type": "object",
         "required": [
@@ -136,17 +176,16 @@
         "properties": {
           "room": {
             "type": "string",
-            "description": "The room containing the lights.",
             "enum": [
               "kitchen",
               "living_room",
               "office",
+              "bathroom",
               "bedroom"
             ]
           },
           "power": {
             "type": "string",
-            "description": "Whether the lights should be on or off.",
             "enum": [
               "on",
               "off"

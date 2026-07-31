@@ -1,5 +1,11 @@
 import Foundation
 
+private enum ToolRequirement: Hashable {
+    case light
+    case event
+    case scheduling
+}
+
 extension VoiceAssistant {
     func streamOllama(
         _ userText: String,
@@ -10,10 +16,24 @@ extension VoiceAssistant {
         let mayRequireConversationEndTool =
             activeReminder == nil
             && mayRequireConversationEndTool(userText)
-        let mayRequireTool =
-            mayRequireLightTool(userText)
-            || mayRequireConversationEndTool
+        let toolRequirements: Set<ToolRequirement> = {
+            guard !mayRequireConversationEndTool || activeReminder == nil else {
+                return []
+            }
+            var requirements = Set<ToolRequirement>()
+            if mayRequireLightTool(userText) {
+                requirements.insert(.light)
+            }
+            if mayRequireEventTool(userText) {
+                requirements.insert(.event)
+            }
+            if mayRequireSchedulingTool(userText) {
+                requirements.insert(.scheduling)
+            }
+            return requirements
+        }()
 
+        let mayRequireTool = !toolRequirements.isEmpty
         var messages = lock.withLock { () -> [Message] in
             var updated = history
 
@@ -80,12 +100,35 @@ extension VoiceAssistant {
             tools.append(endConversationTool)
         }
 
-        var executedTool = false
-        var retriedMissingToolCall = false
+        var executedRequirements = Set<ToolRequirement>()
+        var retriedRequirements = Set<ToolRequirement>()
         var retriedDeferredAction = false
         var activeReminderAcknowledged = false
         var conversationEndRequested = false
         var retriedMissingConversationEndTool = false
+        var retriedReminderAcknowledgement = false
+
+        let toolRequirementsByName = Dictionary(
+            uniqueKeysWithValues: tools.compactMap { tool -> (String, Set<ToolRequirement>)? in
+                let requirements = requirementsSatisfied(
+                    by: tool.function,
+                    availableRequirements: toolRequirements
+                )
+
+                return requirements.isEmpty
+                    ? nil
+                    : (tool.function.name, requirements)
+            }
+        )
+        if !toolRequirements.isEmpty {
+            let mappedToolNames = toolRequirementsByName.keys.sorted()
+
+            print(
+                "[tool loop] requirement-mapped tools: "
+                    + mappedToolNames.joined(separator: ", ")
+            )
+            fflush(stdout)
+        }
 
         for step in 0..<Config.maxToolLoopSteps {
             let assistantMessage = try await ollama.chat(
@@ -129,8 +172,6 @@ extension VoiceAssistant {
                 }
 
                 for toolCall in toolCalls {
-                    executedTool = true
-
                     let result: String
 
                     if toolCall.function.name == "end_conversation" {
@@ -150,6 +191,18 @@ extension VoiceAssistant {
                             """
                     } else {
                         result = try await toolServer.runTool(toolCall)
+                    }
+
+                    let toolSucceeded =
+                        (try? JSONDecoder().decode(
+                            ToolSuccessResponse.self,
+                            from: Data(result.utf8)
+                        ))?.ok == true
+
+                    if toolSucceeded,
+                        let requirements = toolRequirementsByName[toolCall.function.name]
+                    {
+                        executedRequirements.formUnion(requirements)
                     }
 
                     if toolCall.function.name == "acknowledge_notification" {
@@ -210,25 +263,35 @@ extension VoiceAssistant {
                 continue
             }
 
-            if mayRequireTool && !executedTool {
-                print("[tool loop] required-tool validation rejected")
+            let missingRequirements = toolRequirements.subtracting(
+                expandedRequirements(executedRequirements)
+            )
+
+            if !missingRequirements.isEmpty {
+                print(
+                    "[tool loop] required-tool validation rejected: "
+                        + String(describing: missingRequirements)
+                )
                 print("[tool loop] reply: \(assistantMessage.content)")
                 fflush(stdout)
 
-                if retriedMissingToolCall {
+                let alreadyRetried =
+                    !retriedRequirements
+                    .intersection(missingRequirements)
+                    .isEmpty
+
+                if alreadyRetried {
                     throw AtlasError.toolRequiredButNotInvoked
                 }
 
-                retriedMissingToolCall = true
+                retriedRequirements.formUnion(missingRequirements)
 
                 messages.append(
                     Message(
                         role: "user",
-                        content: """
-                            Validation failure: you answered a request that needs tool use
-                            without invoking a tool. Do not write a natural-language answer
-                            yet. Invoke the necessary tool or tools now.
-                            """
+                        content: toolRequirementRetryInstruction(
+                            for: missingRequirements
+                        )
                     )
                 )
 
@@ -254,11 +317,11 @@ extension VoiceAssistant {
                 print("[tool loop] rejected reply: \(reply)")
                 fflush(stdout)
 
-                if retriedMissingToolCall {
+                if retriedReminderAcknowledgement {
                     throw AtlasError.toolRequiredButNotInvoked
                 }
 
-                retriedMissingToolCall = true
+                retriedReminderAcknowledgement = true
 
                 messages.append(
                     Message(
@@ -515,6 +578,70 @@ extension VoiceAssistant {
         }
     }
 
+    private func mayRequireEventTool(_ text: String) -> Bool {
+        let normalized = normalizedText(text)
+
+        let eventWords = [
+            "reminder",
+            "reminders",
+            "remind me",
+            "remind",
+            "reminding",
+
+            "event",
+            "events",
+            "appointment",
+            "appointments",
+            "meeting",
+            "meetings",
+
+            "schedule",
+            "schedules",
+            "scheduled",
+            "scheduling",
+
+            "calendar",
+            "calendars",
+            "agenda",
+            "itinerary",
+
+            "notification",
+            "notifications",
+            "alert",
+            "alerts",
+            "alarm",
+            "alarms",
+
+            "due",
+            "upcoming",
+            "planned",
+            "plan",
+            "plans",
+        ]
+
+        return eventWords.contains { normalized.contains($0) }
+    }
+
+    private func mayRequireSchedulingTool(_ text: String) -> Bool {
+        let normalized = normalizedText(text)
+
+        let schedulingPhrases = [
+            "wake me",
+            "set an alarm",
+            "set alarm",
+            "alarm for",
+            "in a minute",
+            "in an hour",
+            "every day",
+            "every weekday",
+            "every week",
+        ]
+
+        return schedulingPhrases.contains { phrase in
+            normalized.contains(phrase)
+        }
+    }
+
     private func mayRequireLightTool(_ text: String) -> Bool {
         let normalized = normalizedText(text)
 
@@ -540,5 +667,122 @@ extension VoiceAssistant {
 
         return lightWords.contains { normalized.contains($0) }
             && actionWords.contains { normalized.contains($0) }
+    }
+
+    private func toolRequirementRetryInstruction(
+        for requirements: Set<ToolRequirement>
+    ) -> String {
+        let domains =
+            requirements
+            .map(toolRequirementDescription)
+            .sorted()
+            .joined(separator: ", ")
+
+        return """
+            Validation failure: the user's request requires a successful tool call \
+            related to \(domains), but no applicable tool call was made.
+
+            Do not provide a natural-language answer yet. Use the available tool or \
+            tools that address the request, then answer only from their successful \
+            results. If the available tools cannot perform the request, state that \
+            limitation briefly.
+            """
+    }
+
+    private func toolRequirementDescription(
+        _ requirement: ToolRequirement
+    ) -> String {
+        switch requirement {
+        case .light:
+            return "lighting"
+        case .event:
+            return "events, reminders, or notifications"
+        case .scheduling:
+            return "scheduling or alarms"
+        }
+    }
+
+    private func requirementsSatisfied(
+        by tool: ToolFunctionDefinition,
+        availableRequirements: Set<ToolRequirement>
+    ) -> Set<ToolRequirement> {
+        let text = normalizedText(
+            "\(tool.name) \(tool.description)"
+        )
+
+        var result = Set<ToolRequirement>()
+
+        if availableRequirements.contains(.light)
+            && containsAny(
+                in: text,
+                phrases: [
+                    "light",
+                    "lights",
+                    "lamp",
+                    "lamps",
+                    "lighting",
+                ]
+            )
+        {
+            result.insert(.light)
+        }
+
+        if availableRequirements.contains(.event)
+            && containsAny(
+                in: text,
+                phrases: [
+                    "reminder",
+                    "event",
+                    "calendar",
+                    "notification",
+                    "appointment",
+                    "meeting",
+                    "agenda",
+                    "alert",
+                ]
+            )
+        {
+            result.insert(.event)
+        }
+
+        if availableRequirements.contains(.scheduling)
+            && containsAny(
+                in: text,
+                phrases: [
+                    "schedule",
+                    "scheduled",
+                    "scheduling",
+                    "alarm",
+                    "reminder",
+                    "event",
+                    "calendar",
+                    "appointment",
+                    "meeting",
+                ]
+            )
+        {
+            result.insert(.scheduling)
+        }
+
+        return result
+    }
+
+    private func containsAny(
+        in text: String,
+        phrases: [String]
+    ) -> Bool {
+        phrases.contains { text.contains($0) }
+    }
+
+    private func expandedRequirements(
+        _ requirements: Set<ToolRequirement>
+    ) -> Set<ToolRequirement> {
+        var expanded = requirements
+
+        if expanded.contains(.scheduling) {
+            expanded.insert(.event)
+        }
+
+        return expanded
     }
 }

@@ -46,6 +46,55 @@ final class ToolServerClient: @unchecked Sendable {
         return payload.notification
     }
 
+    func markNotificationDelivered(
+        notificationID: String
+    ) async throws {
+        let url = Config.toolServerURL
+            .appendingPathComponent("notifications")
+            .appendingPathComponent(notificationID)
+            .appendingPathComponent("delivered")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Config.toolServerTimeout
+
+        let (data, response) = try await URLSession.shared.data(
+            for: request
+        )
+
+        guard
+            let http = response as? HTTPURLResponse,
+            (200...299).contains(http.statusCode)
+        else {
+            let body = String(decoding: data, as: UTF8.self)
+
+            throw NSError(
+                domain: "ToolServer",
+                code: 12,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not mark notification delivered: \(body)"
+                ]
+            )
+        }
+
+        let payload = try JSONDecoder().decode(
+            AcknowledgementResponse.self,
+            from: data
+        )
+
+        guard payload.ok else {
+            throw NSError(
+                domain: "ToolServer",
+                code: 13,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Tool server rejected notification delivery."
+                ]
+            )
+        }
+    }
+
     func availableTools() async throws -> [ToolDefinition] {
         let url = Config.toolServerURL
             .appendingPathComponent("tools")

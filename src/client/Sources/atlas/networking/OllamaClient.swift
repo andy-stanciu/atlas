@@ -86,31 +86,36 @@ final class OllamaClient: @unchecked Sendable {
         return message
     }
 
-    func generateReminderSpeech(
+    func generateScheduledNotificationSpeech(
         text: String,
+        kind: NotificationKind,
         announcementNumber: Int,
         isConversationInterruption: Bool
     ) async throws -> String {
-        let isRepeat = announcementNumber > 1
-
-        let reminderInstruction =
-            isRepeat
-            ? SystemPrompts.reminderRepeatInstruction
-                .replacingOccurrences(
-                    of: "{ANNOUNCEMENT_NUMBER}",
-                    with: String(announcementNumber)
-                )
-            : SystemPrompts.reminderAnnouncementInstruction
-
         let instruction: String
 
-        if isConversationInterruption {
-            instruction =
-                SystemPrompts.reminderConversationInterruptionInstruction
-                + "\n\n"
-                + reminderInstruction
-        } else {
-            instruction = reminderInstruction
+        switch kind {
+        case .reminder:
+            let reminderInstruction =
+                announcementNumber > 1
+                ? SystemPrompts.reminderRepeatInstruction
+                    .replacingOccurrences(
+                        of: "{ANNOUNCEMENT_NUMBER}",
+                        with: String(announcementNumber)
+                    )
+                : SystemPrompts.reminderAnnouncementInstruction
+
+            if isConversationInterruption {
+                instruction =
+                    SystemPrompts.reminderConversationInterruptionInstruction
+                    + "\n\n"
+                    + reminderInstruction
+            } else {
+                instruction = reminderInstruction
+            }
+
+        case .confirmation:
+            instruction = SystemPrompts.notificationAnnouncementInstruction
         }
 
         let response = try await chat(
@@ -125,7 +130,7 @@ final class OllamaClient: @unchecked Sendable {
                 ),
                 Message(
                     role: "user",
-                    content: "Reminder text: \(text)"
+                    content: "Notification text: \(text)"
                 ),
             ],
             tools: []
@@ -139,7 +144,7 @@ final class OllamaClient: @unchecked Sendable {
             return ""
         }
 
-        if isConversationInterruption {
+        if isConversationInterruption, kind == .reminder {
             return "By the way, \(speech)"
         }
 

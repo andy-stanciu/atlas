@@ -10,6 +10,7 @@ class LightService:
             "kitchen": False,
             "living_room": False,
             "office": False,
+            "bathroom": False,
             "bedroom": False,
         }
 
@@ -76,6 +77,7 @@ def normalize_room(value: object) -> str | None:
         "lounge": "living_room",
         "office": "office",
         "study": "office",
+        "bathroom": "bathroom",
         "bedroom": "bedroom",
     }
 
@@ -87,6 +89,6 @@ def unknown_room_response() -> dict:
         "ok": False,
         "error": (
             "Unknown room. Valid rooms are kitchen, living_room, "
-            "office, and bedroom."
+            "office, bathroom, and bedroom."
         ),
     }

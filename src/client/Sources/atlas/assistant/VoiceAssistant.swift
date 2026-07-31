@@ -146,10 +146,11 @@ final class VoiceAssistant {
                     return false
                 }
 
-                let speech = try await self.ollama.generateReminderSpeech(
+                let speech = try await self.ollama.generateScheduledNotificationSpeech(
                     text: notification.text,
+                    kind: notification.kind,
                     announcementNumber: announcementNumber,
-                    isConversationInterruption: wasConversationActive
+                    isConversationInterruption: wasConversationActive,
                 )
 
                 guard !speech.isEmpty else {
@@ -165,11 +166,15 @@ final class VoiceAssistant {
                         }
 
                         print(
-                            "\n[reminder \(announcementNumber)] "
+                            "\n[\(notification.kind) \(announcementNumber)] "
                                 + notification.text
                         )
                         print("Atlas: \(speech)")
                         fflush(stdout)
+
+                        guard notification.kind == .reminder else {
+                            return
+                        }
 
                         if !wasConversationActive {
                             self.beginReminderConversation()
@@ -656,13 +661,13 @@ final class VoiceAssistant {
         )
 
         let patterns = [
-            #"(?i)^\s*(atlas)[\s,!.:;-]*"#,
-            #"(?i)^\s*hey\s+(atlas)[\s,!.:;-]*"#,
-            #"(?i)^\s*hi\s+(atlas)[\s,!.:;-]*"#,
-            #"(?i)^\s*hello\s+(atlas)[\s,!.:;-]*"#,
-            #"(?i)^\s*good\s+morning\s+(atlas)[\s,!.:;-]*"#,
-            #"(?i)^\s*good\s+afternoon\s+(atlas)[\s,!.:;-]*"#,
-            #"(?i)^\s*good\s+evening\s+(atlas)[\s,!.:;-]*"#,
+            #"(?i)^\s*(atlas|alice)[\s,!.:;-]*"#,
+            #"(?i)^\s*hey\s+(atlas|alice)[\s,!.:;-]*"#,
+            #"(?i)^\s*hi\s+(atlas|alice)[\s,!.:;-]*"#,
+            #"(?i)^\s*hello\s+(atlas|alice)[\s,!.:;-]*"#,
+            #"(?i)^\s*good\s+morning\s+(atlas|alice)[\s,!.:;-]*"#,
+            #"(?i)^\s*good\s+afternoon\s+(atlas|alice)[\s,!.:;-]*"#,
+            #"(?i)^\s*good\s+evening\s+(atlas|alice)[\s,!.:;-]*"#,
         ]
 
         for pattern in patterns {

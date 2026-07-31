@@ -36,11 +36,10 @@ def create_app() -> Flask:
     repository = EventRepository(DATABASE_PATH)
     repository.initialize()
 
+    lights = LightService()
     event_service = EventService(repository)
     notification_service = NotificationService(repository)
-    scheduler = EventScheduler(repository)
-
-    lights = LightService()
+    scheduler = EventScheduler(repository=repository, lights=lights)
     event_tools = EventToolHandlers(event_service)
 
     registry = ToolRegistry(
@@ -97,6 +96,12 @@ def create_app() -> Flask:
     @app.post("/notifications/<notification_id>/ack")
     def acknowledge_notification(notification_id: str):
         result = notification_service.acknowledge(notification_id)
+
+        return jsonify(result), 200 if result["ok"] else 404
+
+    @app.post("/notifications/<notification_id>/delivered")
+    def mark_notification_delivered(notification_id: str):
+        result = notification_service.mark_delivered(notification_id)
 
         return jsonify(result), 200 if result["ok"] else 404
 

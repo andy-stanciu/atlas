@@ -2,8 +2,14 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from .models import ActionType, EventStatus, ScheduledEvent
+from .models import (
+    ActionType,
+    EventAction,
+    EventStatus,
+    ScheduledEvent,
+)
 from .repository import EventRepository
+from tools.lights import normalize_room
 from tools.time import current_datetime_payload
 
 
@@ -19,9 +25,9 @@ class EventService:
     def __init__(self, repository: EventRepository) -> None:
         self._repository = repository
 
-    def schedule_one_time_reminder(self, arguments: dict) -> dict:
+    def schedule_one_time_event(self, arguments: dict) -> dict:
         summary = _required_text(arguments, "summary")
-        message = _required_text(arguments, "message")
+        actions = _parse_actions(arguments)
         scheduled_for_utc = _resolve_scheduled_for(arguments)
 
         event = ScheduledEvent(
@@ -29,8 +35,7 @@ class EventService:
             summary=summary,
             scheduled_for_utc=scheduled_for_utc,
             timezone=DEFAULT_TIMEZONE,
-            action_type=ActionType.VOICE_NOTIFICATION,
-            action_payload={"text": message},
+            actions=actions,
             status=EventStatus.SCHEDULED,
             created_at_utc=datetime.now(timezone.utc),
         )
@@ -42,7 +47,7 @@ class EventService:
         return {
             "ok": True,
             "events": [
-                event_to_response(event)
+                event_to_response_basic(event)
                 for event in self._repository.list_events(include_history=include_history)
             ],
             "current_datetime": current_datetime_payload(),
@@ -88,11 +93,39 @@ def event_to_response(event: ScheduledEvent) -> dict:
         "ok": True,
         "event_id": event.id,
         "summary": event.summary,
-        "action_type": event.action_type.value,
+        "actions": [
+            {
+                "index": index,
+                "type": action.type.value,
+                **action.payload,
+                **(
+                    {
+                        "confirmation_message": action.confirmation_message,
+                    }
+                    if action.confirmation_message is not None
+                    else {}
+                ),
+            }
+            for index, action in enumerate(event.actions)
+        ],
         "status": event.status.value,
         "date": pacific_time.strftime("%Y-%m-%d"),
         "time": pacific_time.strftime("%-I:%M %p"),
         "current_datetime": current_datetime_payload(),
+    }
+
+def event_to_response_basic(event: ScheduledEvent) -> dict:
+    pacific_time = event.scheduled_for_utc.astimezone(
+        PACIFIC_TIMEZONE
+    )
+
+    return {
+        "ok": True,
+        "event_id": event.id,
+        "summary": event.summary,
+        "status": event.status.value,
+        "date": pacific_time.strftime("%Y-%m-%d"),
+        "time": pacific_time.strftime("%-I:%M %p"),
     }
 
 
@@ -106,6 +139,124 @@ def _required_text(arguments: dict, field: str) -> str:
 
     return value.strip()
 
+def _parse_actions(arguments: dict) -> tuple[EventAction, ...]:
+    raw_actions = arguments.get("actions")
+
+    if not isinstance(raw_actions, list) or not raw_actions:
+        raise EventValidationError(
+            "actions must be a non-empty array."
+        )
+
+    parsed_actions = []
+
+    for index, raw_action in enumerate(raw_actions):
+        if not isinstance(raw_action, dict):
+            raise EventValidationError(
+                f"actions[{index}] must be an object."
+            )
+
+        raw_type = raw_action.get("type")
+
+        if not isinstance(raw_type, str):
+            raise EventValidationError(
+                f"actions[{index}].type must be a string."
+            )
+
+        try:
+            action_type = ActionType(raw_type)
+        except ValueError as error:
+            supported = ", ".join(
+                action_type.value for action_type in ActionType
+            )
+            raise EventValidationError(
+                f"actions[{index}].type must be one of: {supported}."
+            ) from error
+
+        confirmation_message = _optional_text(
+            raw_action,
+            "confirmation_message",
+            index,
+        )
+
+        if action_type is ActionType.VOICE_NOTIFICATION:
+            parsed_actions.append(
+                EventAction(
+                    type=action_type,
+                    payload={
+                        "text": _required_action_text(
+                            raw_action,
+                            "text",
+                            index,
+                        )
+                    },
+                    confirmation_message=None,
+                )
+            )
+            continue
+
+        if action_type is ActionType.SET_LIGHT:
+            room = normalize_room(raw_action.get("room"))
+
+            if room is None:
+                raise EventValidationError(
+                    f"actions[{index}].room is not a valid room."
+                )
+
+            power = raw_action.get("power")
+
+            if power not in {"on", "off"}:
+                raise EventValidationError(
+                    f"actions[{index}].power must be 'on' or 'off'."
+                )
+
+            parsed_actions.append(
+                EventAction(
+                    type=action_type,
+                    payload={
+                        "room": room,
+                        "power": power,
+                    },
+                    confirmation_message=confirmation_message,
+                )
+            )
+            continue
+
+        raise EventValidationError(
+            f"Unsupported action type: {action_type.value}."
+        )
+
+    return tuple(parsed_actions)
+
+def _required_action_text(
+    action: dict,
+    field: str,
+    index: int,
+) -> str:
+    value = action.get(field)
+
+    if not isinstance(value, str) or not value.strip():
+        raise EventValidationError(
+            f"actions[{index}].{field} must be a non-empty string."
+        )
+
+    return value.strip()
+
+def _optional_text(
+    action: dict,
+    field: str,
+    index: int,
+) -> str | None:
+    value = action.get(field)
+
+    if value is None:
+        return None
+
+    if not isinstance(value, str) or not value.strip():
+        raise EventValidationError(
+            f"actions[{index}].{field} must be a non-empty string."
+        )
+
+    return value.strip()
 
 def _resolve_scheduled_for(arguments: dict) -> datetime:
     date_value = arguments.get("date")

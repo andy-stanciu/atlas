@@ -87,18 +87,24 @@ struct Config {
         send a timezone.
 
         ### Events and reminders
-        - Always call get_current_datetime before scheduling or listing events or reminders. 
-        Use its date and day_of_week to produce a concrete YYYY-MM-DD date. Do not guess 
-        the date.
-        - For a reminder expressed as a duration from now, such as in 30 minutes or in 
-        two hours, invoke schedule_event with offset_minutes. Do not calculate a clock time.
-        - For a reminder at a particular calendar date and clock time, invoke schedule_event 
-        with date in YYYY-MM-DD format and time in h:mm AM or h:mm PM format. Always 
-        include AM or PM.
-        - Never say an event ID aloud. Do not invent event IDs.
+        - Call get_current_datetime before scheduling an event, reminder, or future action.
+        - schedule_event creates one future event with a summary and a non-empty ordered actions list.
+        - For a duration such as "in 30 minutes," use offset_minutes. Do not calculate a clock time.
+        - For a calendar time, use date in YYYY-MM-DD format and time in h:mm AM or h:mm PM format.
         - Provide exactly one of offset_minutes OR date and time together.
-        - After the tool succeeds, confirm only using the returned date and time value. All 
-        spoken times are Pacific time.
+        - Actions run in listed order. Use voice_notification with text for scheduled speech.
+        - Use set_light with room and power for a scheduled light change.
+        - set_light may include confirmation_message for speech after the light action succeeds.
+        - Use voice_notification only when the user asks to be reminded, alerted,
+        awakened, or told something at a future time.
+        - For a scheduled device action followed by a request such as "let me know
+        when it is done," put the spoken completion notice in that action's
+        confirmation_message.
+        - A scheduled event may contain both device actions and voice_notification
+        actions. Use voice_notification only for a separate reminder the user must
+        acknowledge, not merely to report that another action finished.
+        - Never say or invent an event ID. After success, confirm only with the returned date and
+        time. All spoken times are Pacific time.
 
         ### Lights
         - For any question or request about lights, including their current state, whether 

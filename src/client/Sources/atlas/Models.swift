@@ -48,17 +48,59 @@ struct ToolParameters: Codable {
     let type: String
     let required: [String]
     let properties: [String: ToolProperty]
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case required
+        case properties
+    }
+
+    init(
+        type: String,
+        required: [String] = [],
+        properties: [String: ToolProperty] = [:]
+    ) {
+        self.type = type
+        self.required = required
+        self.properties = properties
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(
+            keyedBy: CodingKeys.self
+        )
+
+        type = try container.decode(String.self, forKey: .type)
+
+        required =
+            try container.decodeIfPresent(
+                [String].self,
+                forKey: .required
+            ) ?? []
+
+        properties =
+            try container.decodeIfPresent(
+                [String: ToolProperty].self,
+                forKey: .properties
+            ) ?? [:]
+    }
+}
+
+struct ToolSuccessResponse: Decodable {
+    let ok: Bool
 }
 
 struct ToolProperty: Codable {
-    let type: String
-    let description: String
+    let type: String?
+    let description: String?
     let enumValues: [String]?
+    let items: JSONValue?
 
     enum CodingKeys: String, CodingKey {
         case type
         case description
         case enumValues = "enum"
+        case items
     }
 }
 
