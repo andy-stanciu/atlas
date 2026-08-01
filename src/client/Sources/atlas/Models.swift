@@ -86,10 +86,6 @@ struct ToolParameters: Codable {
     }
 }
 
-struct ToolSuccessResponse: Decodable {
-    let ok: Bool
-}
-
 struct ToolProperty: Codable {
     let type: String?
     let description: String?
@@ -104,14 +100,8 @@ struct ToolProperty: Codable {
     }
 }
 
-struct AcknowledgementResponse: Codable {
+struct ToolSuccessResponse: Decodable {
     let ok: Bool
-    let notificationID: String?
-
-    enum CodingKeys: String, CodingKey {
-        case ok
-        case notificationID = "notification_id"
-    }
 }
 
 struct ToolListResponse: Codable {
@@ -156,4 +146,21 @@ enum AssistantState: Equatable {
 
 enum AtlasError: LocalizedError {
     case toolRequiredButNotInvoked
+}
+
+struct ActionEnvelope: Decodable {
+    let decision: Decision
+    let speech: String
+    let calls: [ActionEnvelopeToolCall]
+
+    enum Decision: String, Decodable {
+        case respond
+        case clarify
+        case callTools = "call_tools"
+    }
+}
+
+struct ActionEnvelopeToolCall: Decodable {
+    let name: String
+    let arguments: [String: JSONValue]
 }

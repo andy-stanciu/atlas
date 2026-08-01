@@ -2,14 +2,11 @@ import AVFoundation
 import Foundation
 import QuartzCore
 
-enum SpeechPurpose {
-    case normalResponse
-    case reminder
-}
-
-struct SpeechPlaybackResult {
-    let completed: Bool
-    let interrupted: Bool
+enum SpeechPlaybackOutcome: Equatable {
+    case completed
+    case interrupted
+    case notStarted
+    case failed
 }
 
 final class AudioPlayback: @unchecked Sendable {
@@ -20,7 +17,7 @@ final class AudioPlayback: @unchecked Sendable {
 
     private let beginSpeaking: () -> Bool
     private let finishSpeaking: () -> Void
-    private let beginReminderPlayback: () -> Bool
+    private let beginScheduledSpeech: () -> Bool
 
     init(
         player: AVAudioPlayerNode,
@@ -29,7 +26,7 @@ final class AudioPlayback: @unchecked Sendable {
         voiceFormat: AVAudioFormat,
         beginSpeaking: @escaping () -> Bool,
         finishSpeaking: @escaping () -> Void,
-        beginReminderPlayback: @escaping () -> Bool,
+        beginScheduledSpeech: @escaping () -> Bool
     ) {
         self.player = player
         self.kokoro = kokoro
@@ -37,7 +34,7 @@ final class AudioPlayback: @unchecked Sendable {
         self.voiceFormat = voiceFormat
         self.beginSpeaking = beginSpeaking
         self.finishSpeaking = finishSpeaking
-        self.beginReminderPlayback = beginReminderPlayback
+        self.beginScheduledSpeech = beginScheduledSpeech
     }
 
     func queueNormalSpeech(_ text: String) async throws {
@@ -61,41 +58,29 @@ final class AudioPlayback: @unchecked Sendable {
         }
     }
 
-    func speak(
+    func speakScheduled(
         _ text: String,
-        purpose: SpeechPurpose,
         onStarted: @escaping @Sendable () async -> Void
-    ) async throws -> SpeechPlaybackResult {
+    ) async throws -> SpeechPlaybackOutcome {
         let wavURL = try await synthesize(text)
 
-        return try await withCheckedThrowingContinuation {
-            (
-                continuation:
-                    CheckedContinuation<SpeechPlaybackResult, Error>
-            ) in
+        return await withCheckedContinuation { continuation in
             DispatchQueue.main.async { [weak self] in
                 guard let self else {
                     try? FileManager.default.removeItem(at: wavURL)
-
-                    continuation.resume(
-                        returning: SpeechPlaybackResult(
-                            completed: false,
-                            interrupted: true
-                        )
-                    )
-
+                    continuation.resume(returning: .notStarted)
                     return
                 }
 
                 do {
-                    try self.playReminderWAV(
+                    try self.playScheduledWAV(
                         wavURL,
                         continuation: continuation,
                         onStarted: onStarted
                     )
                 } catch {
                     try? FileManager.default.removeItem(at: wavURL)
-                    continuation.resume(throwing: error)
+                    continuation.resume(returning: .failed)
                 }
             }
         }
@@ -149,23 +134,16 @@ final class AudioPlayback: @unchecked Sendable {
         }
     }
 
-    private func playReminderWAV(
+    private func playScheduledWAV(
         _ wavURL: URL,
-        continuation: CheckedContinuation<SpeechPlaybackResult, Error>,
+        continuation: CheckedContinuation<SpeechPlaybackOutcome, Never>,
         onStarted: @escaping @Sendable () async -> Void
     ) throws {
         let outputBuffer = try makeOutputBuffer(from: wavURL)
 
-        guard beginReminderPlayback() else {
+        guard beginScheduledSpeech() else {
             try? FileManager.default.removeItem(at: wavURL)
-
-            continuation.resume(
-                returning: SpeechPlaybackResult(
-                    completed: false,
-                    interrupted: true
-                )
-            )
-
+            continuation.resume(returning: .notStarted)
             return
         }
 
@@ -178,13 +156,7 @@ final class AudioPlayback: @unchecked Sendable {
 
             DispatchQueue.main.async {
                 self?.finishSpeaking()
-
-                continuation.resume(
-                    returning: SpeechPlaybackResult(
-                        completed: true,
-                        interrupted: false
-                    )
-                )
+                continuation.resume(returning: .completed)
             }
         }
 

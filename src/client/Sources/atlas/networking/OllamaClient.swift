@@ -32,13 +32,10 @@ final class OllamaClient: @unchecked Sendable {
             for: request
         )
 
-        guard
-            let http = response as? HTTPURLResponse,
+        guard let http = response as? HTTPURLResponse,
             (200...299).contains(http.statusCode)
         else {
-            let statusCode =
-                (response as? HTTPURLResponse)?
-                .statusCode ?? -1
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
 
             let body = String(decoding: data, as: UTF8.self)
 
@@ -86,9 +83,9 @@ final class OllamaClient: @unchecked Sendable {
         return message
     }
 
-    func generateScheduledNotificationSpeech(
+    func generateScheduledSpeech(
         text: String,
-        kind: NotificationKind,
+        kind: SpeechKind,
         announcementNumber: Int,
         isConversationInterruption: Bool
     ) async throws -> String {
@@ -105,17 +102,15 @@ final class OllamaClient: @unchecked Sendable {
                     )
                 : SystemPrompts.reminderAnnouncementInstruction
 
-            if isConversationInterruption {
-                instruction =
-                    SystemPrompts.reminderConversationInterruptionInstruction
+            instruction =
+                isConversationInterruption
+                ? SystemPrompts.reminderConversationInterruptionInstruction
                     + "\n\n"
                     + reminderInstruction
-            } else {
-                instruction = reminderInstruction
-            }
+                : reminderInstruction
 
-        case .confirmation:
-            instruction = SystemPrompts.notificationAnnouncementInstruction
+        case .announcement:
+            instruction = SystemPrompts.announcementInstruction
         }
 
         let response = try await chat(
@@ -130,7 +125,7 @@ final class OllamaClient: @unchecked Sendable {
                 ),
                 Message(
                     role: "user",
-                    content: "Notification text: \(text)"
+                    content: "Speech text: \(text)"
                 ),
             ],
             tools: []
@@ -149,5 +144,26 @@ final class OllamaClient: @unchecked Sendable {
         }
 
         return speech
+    }
+
+    func generateFarewell() async throws -> String {
+        let response = try await chat(
+            messages: [
+                Message(
+                    role: "system",
+                    content: Config.systemPrompt
+                ),
+                Message(
+                    role: "system",
+                    content: SystemPrompts.farewellInstruction
+                ),
+                Message(role: "user", content: "Goodbye."),
+            ],
+            tools: []
+        )
+
+        return response.content.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
     }
 }

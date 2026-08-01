@@ -2,15 +2,16 @@ import Foundation
 
 actor NotificationCoordinator {
     typealias DeliveryContext = @Sendable () async -> Bool?
-    typealias AnnouncementStarted = @Sendable () async -> Void
+
+    typealias SpeechStarted = @Sendable () async -> Void
 
     typealias Deliver =
         @Sendable (
-            PendingNotification,
+            PendingSpeech,
             Int,
             Bool,
-            @escaping AnnouncementStarted
-        ) async throws -> Bool
+            @escaping SpeechStarted
+        ) async throws -> SpeechPlaybackOutcome
 
     private let toolServer: ToolServerClient
     private let deliveryContext: DeliveryContext
@@ -19,7 +20,7 @@ actor NotificationCoordinator {
     private let repeatInterval: TimeInterval
 
     private var activeReminder: ActiveReminder?
-    private var oneShotDeliveryInFlight = false
+    private var announcementDeliveryInFlight = false
     private var pollingTask: Task<Void, Never>?
 
     init(
@@ -30,10 +31,10 @@ actor NotificationCoordinator {
         deliver: @escaping Deliver
     ) {
         self.toolServer = toolServer
-        self.pollInterval = pollInterval
-        self.repeatInterval = repeatInterval
         self.deliveryContext = deliveryContext
         self.deliver = deliver
+        self.pollInterval = pollInterval
+        self.repeatInterval = repeatInterval
     }
 
     func start() {
@@ -51,100 +52,82 @@ actor NotificationCoordinator {
         pollingTask = nil
     }
 
-    func acknowledgementEligibleReminderSnapshot() -> PendingNotification? {
+    func acknowledgementEligibleReminderSnapshot() -> PendingSpeech? {
         guard let reminder = activeReminder else {
             return nil
         }
 
-        guard reminder.notification.kind == .reminder else {
+        guard reminder.hasStartedPlayback else {
             return nil
         }
 
-        return reminder.notification
+        return reminder.speech
     }
 
-    func markAnnouncementStarted(notificationID: String) {
-        guard
-            let reminder = activeReminder,
-            reminder.notification.id == notificationID,
-            reminder.notification.kind == .reminder
-        else {
-            return
-        }
-    }
-
-    func markAcknowledged(notificationID: String) {
-        guard
-            let reminder = activeReminder,
-            reminder.notification.id == notificationID,
-            reminder.notification.kind == .reminder
-        else {
-            return
-        }
+    func markReminderAcknowledged() {
         activeReminder = nil
-    }
-
-    func isActive(notificationID: String) -> Bool {
-        activeReminder?.notification.id == notificationID
     }
 
     private func run() async {
         while !Task.isCancelled {
             do {
-                try await acquireNotificationIfNeeded()
+                try await acquireSpeechIfNeeded()
                 await deliverReminderIfDue()
             } catch is CancellationError {
                 return
             } catch {
                 print(
-                    "[notifications] polling error: "
+                    "[speech] polling error: "
                         + error.localizedDescription
                 )
             }
 
             do {
-                try await Task.sleep(for: .seconds(pollInterval))
+                try await Task.sleep(
+                    for: .seconds(pollInterval)
+                )
             } catch {
                 return
             }
         }
     }
 
-    private func acquireNotificationIfNeeded() async throws {
+    private func acquireSpeechIfNeeded() async throws {
         guard activeReminder == nil else {
             return
         }
 
-        guard !oneShotDeliveryInFlight else {
+        guard !announcementDeliveryInFlight else {
             return
         }
 
-        guard let notification = try await toolServer.nextNotification()
-        else {
+        guard let speech = try await toolServer.nextSpeech() else {
             return
         }
 
-        switch notification.kind {
+        switch speech.kind {
         case .reminder:
             activeReminder = ActiveReminder(
-                notification: notification,
+                speech: speech,
                 announcementCount: 0,
                 nextAnnouncementAt: .now,
-                isAnnouncementInFlight: false
+                isDeliveryInFlight: false,
+                hasStartedPlayback: false
             )
 
-        case .confirmation:
-            await deliverOneShot(notification)
+        case .announcement:
+            await deliverAnnouncement(speech)
         }
     }
 
-    private func deliverOneShot(
-        _ notification: PendingNotification
+    private func deliverAnnouncement(
+        _ speech: PendingSpeech
     ) async {
-        guard notification.kind == .confirmation else {
+        guard speech.kind == .announcement else {
             return
         }
-        guard !oneShotDeliveryInFlight else {
+
+        guard !announcementDeliveryInFlight else {
             return
         }
 
@@ -152,31 +135,31 @@ actor NotificationCoordinator {
             return
         }
 
-        oneShotDeliveryInFlight = true
+        announcementDeliveryInFlight = true
 
         defer {
-            oneShotDeliveryInFlight = false
+            announcementDeliveryInFlight = false
         }
 
         do {
-            let completed = try await deliver(
-                notification,
+            let outcome = try await deliver(
+                speech,
                 1,
                 wasConversationActive,
                 {}
             )
 
-            guard completed else {
+            guard outcome == .completed || outcome == .interrupted else {
                 return
             }
 
-            try await toolServer.markNotificationDelivered(
-                notificationID: notification.id
+            try await toolServer.markAnnouncementDelivered(
+                speechID: speech.id
             )
         } catch {
             print(
-                "[notifications] one-shot delivery failed for "
-                    + "\(notification.id): "
+                "[speech] announcement delivery failed for "
+                    + "\(speech.id): "
                     + error.localizedDescription
             )
         }
@@ -187,12 +170,7 @@ actor NotificationCoordinator {
             return
         }
 
-        guard reminder.notification.kind == .reminder else {
-            activeReminder = nil
-            return
-        }
-
-        guard !reminder.isAnnouncementInFlight else {
+        guard !reminder.isDeliveryInFlight else {
             return
         }
 
@@ -204,62 +182,76 @@ actor NotificationCoordinator {
             return
         }
 
-        reminder.isAnnouncementInFlight = true
+        reminder.isDeliveryInFlight = true
         activeReminder = reminder
 
-        do {
-            let announcementNumber = reminder.announcementCount + 1
-            let notificationID = reminder.notification.id
+        let speechID = reminder.speech.id
+        let announcementNumber = reminder.announcementCount + 1
 
-            let completed = try await deliver(
-                reminder.notification,
+        do {
+            let outcome = try await deliver(
+                reminder.speech,
                 announcementNumber,
                 wasConversationActive,
                 { [weak self] in
-                    await self?.markAnnouncementStarted(
-                        notificationID: notificationID
+                    await self?.markReminderPlaybackStarted(
+                        speechID: speechID
                     )
                 }
             )
 
             finishReminderDelivery(
-                notificationID: notificationID,
-                completed: completed
+                speechID: speechID,
+                outcome: outcome
             )
         } catch {
             print(
-                "[notifications] reminder delivery failed for "
-                    + "\(reminder.notification.id): "
+                "[speech] reminder delivery failed for "
+                    + "\(speechID): "
                     + error.localizedDescription
             )
 
             finishReminderDelivery(
-                notificationID: reminder.notification.id,
-                completed: false
+                speechID: speechID,
+                outcome: .failed
             )
         }
     }
 
+    private func markReminderPlaybackStarted(speechID: Int) {
+        guard var reminder = activeReminder else {
+            return
+        }
+
+        guard reminder.speech.id == speechID else {
+            return
+        }
+
+        reminder.hasStartedPlayback = true
+        activeReminder = reminder
+    }
+
     private func finishReminderDelivery(
-        notificationID: String,
-        completed: Bool
+        speechID: Int,
+        outcome: SpeechPlaybackOutcome
     ) {
         guard var reminder = activeReminder else {
             return
         }
 
-        guard reminder.notification.id == notificationID else {
+        guard reminder.speech.id == speechID else {
             return
         }
 
-        reminder.isAnnouncementInFlight = false
+        reminder.isDeliveryInFlight = false
 
-        if completed {
+        switch outcome {
+        case .completed, .interrupted:
             reminder.announcementCount += 1
-
             reminder.nextAnnouncementAt = Date()
                 .addingTimeInterval(repeatInterval)
-        } else {
+
+        case .notStarted, .failed:
             reminder.nextAnnouncementAt = Date()
                 .addingTimeInterval(pollInterval)
         }

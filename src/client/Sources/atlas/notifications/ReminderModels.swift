@@ -1,39 +1,33 @@
 import Foundation
 
-
-struct PendingNotificationResponse: Decodable {
+struct PendingSpeechResponse: Decodable {
     let ok: Bool
-    let notification: PendingNotification?
+    let speech: PendingSpeech?
 }
 
-struct PendingNotification: Decodable, Equatable {
-    let id: String
-    let eventID: String
-    let actionIndex: Int
-    let kind: NotificationKind
+struct PendingSpeech: Decodable, Equatable {
+    let id: Int
+    let kind: SpeechKind
     let text: String
+    let reminderID: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
-        case eventID = "event_id"
-        case actionIndex = "action_index"
         case kind
         case text
-    }
-
-    var requiresAcknowledgement: Bool {
-        kind == .reminder
+        case reminderID = "reminder_id"
     }
 }
 
-enum NotificationKind: String, Codable, Equatable {
+enum SpeechKind: String, Codable, Equatable {
     case reminder
-    case confirmation
+    case announcement
 }
 
 struct ActiveReminder: Equatable {
-    let notification: PendingNotification
+    let speech: PendingSpeech
     var announcementCount: Int
     var nextAnnouncementAt: Date
-    var isAnnouncementInFlight: Bool
+    var isDeliveryInFlight: Bool
+    var hasStartedPlayback: Bool
 }

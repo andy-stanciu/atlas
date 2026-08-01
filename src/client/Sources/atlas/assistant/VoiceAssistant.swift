@@ -60,8 +60,8 @@ final class VoiceAssistant {
             finishSpeaking: { [weak self] in
                 self?.bufferFinished()
             },
-            beginReminderPlayback: { [weak self] in
-                self?.beginReminderPlayback() ?? false
+            beginScheduledSpeech: { [weak self] in
+                self?.beginScheduledSpeech() ?? false
             }
         )
     }
@@ -131,60 +131,50 @@ final class VoiceAssistant {
     private func startNotificationCoordinator() {
         notificationCoordinator = NotificationCoordinator(
             toolServer: toolServer,
-            pollInterval: Config.notificationPollIntervalSeconds,
+            pollInterval: Config.speechPollIntervalSeconds,
             repeatInterval: Config.reminderRepeatIntervalSeconds,
             deliveryContext: { [weak self] in
-                self?.reminderDeliveryContext()
+                self?.scheduledSpeechDeliveryContext()
             },
-            deliver: {
-                [weak self]
-                notification,
-                announcementNumber,
-                wasConversationActive,
-                onStarted in
+            deliver: { [weak self] speech, number, wasConversationActive, onStarted in
                 guard let self else {
-                    return false
+                    return .notStarted
                 }
 
-                let speech = try await self.ollama.generateScheduledNotificationSpeech(
-                    text: notification.text,
-                    kind: notification.kind,
-                    announcementNumber: announcementNumber,
-                    isConversationInterruption: wasConversationActive,
+                let spokenText = try await self.ollama.generateScheduledSpeech(
+                    text: speech.text,
+                    kind: speech.kind,
+                    announcementNumber: number,
+                    isConversationInterruption: wasConversationActive
                 )
 
-                guard !speech.isEmpty else {
-                    return false
+                guard !spokenText.isEmpty else {
+                    return .failed
                 }
 
-                let result = try await self.playback.speak(
-                    speech,
-                    purpose: .reminder,
+                return try await self.playback.speakScheduled(
+                    spokenText,
                     onStarted: { [weak self] in
                         guard let self else {
                             return
                         }
 
                         print(
-                            "\n[\(notification.kind) \(announcementNumber)] "
-                                + notification.text
+                            "\n[\(speech.kind.rawValue) \(number)] "
+                                + speech.text
                         )
-                        print("Atlas: \(speech)")
+                        print("Atlas: \(spokenText)")
                         fflush(stdout)
 
-                        guard notification.kind == .reminder else {
-                            return
-                        }
-
-                        if !wasConversationActive {
+                        if speech.kind == .reminder,
+                            !wasConversationActive
+                        {
                             self.beginReminderConversation()
                         }
 
                         await onStarted()
                     }
                 )
-
-                return result.completed
             }
         )
 
@@ -193,7 +183,7 @@ final class VoiceAssistant {
         }
     }
 
-    private func reminderDeliveryContext() -> Bool? {
+    private func scheduledSpeechDeliveryContext() -> Bool? {
         lock.withLock {
             guard state == .listening else {
                 return nil
@@ -235,7 +225,7 @@ final class VoiceAssistant {
         return didBegin
     }
 
-    private func beginReminderPlayback() -> Bool {
+    private func beginScheduledSpeech() -> Bool {
         var shouldCancelTimeout = false
 
         let didBegin = lock.withLock { () -> Bool in
@@ -270,17 +260,19 @@ final class VoiceAssistant {
         lock.withLock {
             queuedAudioBuffers = max(0, queuedAudioBuffers - 1)
 
-            if queuedAudioBuffers == 0, state == .speaking {
-                state = .listening
-                speechFrames = 0
-                silenceFrames = 0
+            guard queuedAudioBuffers == 0, state == .speaking else {
+                return
+            }
 
-                if shouldEndConversationAfterSpeech {
-                    shouldEndConversationAfterSpeech = false
-                    shouldEndConversation = true
-                } else {
-                    shouldStartTimeout = conversationActive
-                }
+            state = .listening
+            speechFrames = 0
+            silenceFrames = 0
+
+            if shouldEndConversationAfterSpeech {
+                shouldEndConversationAfterSpeech = false
+                shouldEndConversation = true
+            } else {
+                shouldStartTimeout = conversationActive
             }
         }
 
@@ -292,8 +284,7 @@ final class VoiceAssistant {
     }
 
     private func handleAudio(_ buffer: AVAudioPCMBuffer) {
-        guard
-            let channels = buffer.floatChannelData,
+        guard let channels = buffer.floatChannelData,
             buffer.frameLength > 0
         else {
             return
@@ -312,7 +303,6 @@ final class VoiceAssistant {
         var completedSampleRate: Double?
         var shouldStopPlayback = false
         var shouldCancelTimeout = false
-        var shouldCancelScheduledConversationEnd = false
 
         lock.lock()
 
@@ -367,8 +357,6 @@ final class VoiceAssistant {
                 speechFrames = 0
                 clearPreRoll()
                 shouldStopPlayback = true
-                shouldCancelScheduledConversationEnd =
-                    shouldEndConversationAfterSpeech
                 shouldEndConversationAfterSpeech = false
             }
 
@@ -393,9 +381,6 @@ final class VoiceAssistant {
 
                 self.lock.withLock {
                     self.queuedAudioBuffers = 0
-                    if shouldCancelScheduledConversationEnd {
-                        self.shouldEndConversationAfterSpeech = false
-                    }
                 }
 
                 print("\nInterrupted. Listening...", terminator: "")
@@ -418,6 +403,7 @@ final class VoiceAssistant {
         sampleRate: Double
     ) async {
         var debugUserText = "<speech was not transcribed>"
+
         do {
             let wavURL = try writeTemporaryWAV(
                 pcm: pcm,
@@ -456,9 +442,23 @@ final class VoiceAssistant {
                 if userText.isEmpty {
                     userText = "Hello"
                 }
+
                 debugUserText = userText
             } else {
                 cancelConversationTimeout()
+            }
+
+            let activeReminder = await notificationCoordinator?
+                .acknowledgementEligibleReminderSnapshot()
+
+            if activeReminder == nil,
+                ConversationClosing.shouldClose(
+                    userText: userText,
+                    normalizedText: normalizedText
+                )
+            {
+                try await closeConversation()
+                return
             }
 
             print("\nYou: \(userText)")
@@ -488,13 +488,22 @@ final class VoiceAssistant {
             let elapsed = CACurrentMediaTime() - startedAt
 
             if !printedAnyText {
-                print(fullReply, terminator: "")
+                if fullReply.isEmpty {
+                    print("I did not catch that. Please try again.", terminator: "")
+                    fflush(stdout)
+
+                    try await playback.queueNormalSpeech(
+                        "I did not catch that. Please try again."
+                    )
+                } else {
+                    print(fullReply, terminator: "")
+                }
             }
 
             print()
             print(
                 "[timing] LLM stream complete: "
-                    + "\(String(format: "%.3f", elapsed)) s"
+                    + "\(String(format: "%.3f", elapsed)) s\n"
             )
         } catch AtlasError.toolRequiredButNotInvoked {
             let fallback =
@@ -510,22 +519,10 @@ final class VoiceAssistant {
                 reason: Tool-loop validation rejected the model response twice.
                 """
             )
-            fflush(stdout)
 
             print("\nAtlas: \(fallback)")
-
-            do {
-                try await playback.queueNormalSpeech(fallback)
-            } catch {
-                print(
-                    "[pipeline fallback TTS error] "
-                        + String(describing: error)
-                )
-                fflush(stdout)
-            }
-
+            try? await playback.queueNormalSpeech(fallback)
             transitionToListening()
-
         } catch {
             let nsError = error as NSError
 
@@ -540,10 +537,25 @@ final class VoiceAssistant {
                 userInfo: \(nsError.userInfo)
                 """
             )
-            fflush(stdout)
 
             transitionToListening()
         }
+    }
+
+    private func closeConversation() async throws {
+        let farewell = try await ollama.generateFarewell()
+
+        guard !farewell.isEmpty else {
+            endConversation()
+            return
+        }
+
+        print("\nYou: conversation closing")
+        print("Atlas: \(farewell)")
+        fflush(stdout)
+
+        scheduleConversationEndAfterSpeech()
+        try await playback.queueNormalSpeech(farewell)
     }
 
     private func beginConversation() {
@@ -577,7 +589,7 @@ final class VoiceAssistant {
         resetConversationTimeout()
     }
 
-    func scheduleConversationEndAfterSpeech() {
+    private func scheduleConversationEndAfterSpeech() {
         lock.withLock {
             shouldEndConversationAfterSpeech = true
             conversationTimeoutWorkItem?.cancel()
@@ -686,7 +698,9 @@ final class VoiceAssistant {
             )
         }
 
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
     }
 
     func normalizedText(_ text: String) -> String {
@@ -793,7 +807,7 @@ final class VoiceAssistant {
         let elapsed = CACurrentMediaTime() - startedAt
 
         print(
-            "\n[timing] \(label): "
+            "[timing] \(label): "
                 + "\(String(format: "%.3f", elapsed)) s"
         )
 

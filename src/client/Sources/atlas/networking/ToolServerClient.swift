@@ -1,9 +1,12 @@
 import Foundation
 
 final class ToolServerClient: @unchecked Sendable {
-    func nextNotification() async throws -> PendingNotification? {
+    private let lock = NSLock()
+    private var cachedTools: [ToolDefinition]?
+
+    func nextSpeech() async throws -> PendingSpeech? {
         let url = Config.toolServerURL
-            .appendingPathComponent("notifications")
+            .appendingPathComponent("speech")
             .appendingPathComponent("next")
 
         var request = URLRequest(url: url)
@@ -13,8 +16,7 @@ final class ToolServerClient: @unchecked Sendable {
             for: request
         )
 
-        guard
-            let http = response as? HTTPURLResponse,
+        guard let http = response as? HTTPURLResponse,
             (200...299).contains(http.statusCode)
         else {
             throw NSError(
@@ -22,13 +24,13 @@ final class ToolServerClient: @unchecked Sendable {
                 code: 10,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Could not fetch pending notifications."
+                        "Could not fetch pending speech."
                 ]
             )
         }
 
         let payload = try JSONDecoder().decode(
-            PendingNotificationResponse.self,
+            PendingSpeechResponse.self,
             from: data
         )
 
@@ -38,20 +40,21 @@ final class ToolServerClient: @unchecked Sendable {
                 code: 11,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Tool server rejected notification request."
+                        "Tool server rejected the speech request."
                 ]
             )
         }
 
-        return payload.notification
+        return payload.speech
     }
 
-    func markNotificationDelivered(
-        notificationID: String
+    func markAnnouncementDelivered(
+        speechID: Int
     ) async throws {
         let url = Config.toolServerURL
-            .appendingPathComponent("notifications")
-            .appendingPathComponent(notificationID)
+            .appendingPathComponent("speech")
+            .appendingPathComponent("announcement")
+            .appendingPathComponent(String(speechID))
             .appendingPathComponent("delivered")
 
         var request = URLRequest(url: url)
@@ -62,8 +65,7 @@ final class ToolServerClient: @unchecked Sendable {
             for: request
         )
 
-        guard
-            let http = response as? HTTPURLResponse,
+        guard let http = response as? HTTPURLResponse,
             (200...299).contains(http.statusCode)
         else {
             let body = String(decoding: data, as: UTF8.self)
@@ -73,13 +75,13 @@ final class ToolServerClient: @unchecked Sendable {
                 code: 12,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Could not mark notification delivered: \(body)"
+                        "Could not mark announcement delivered: \(body)"
                 ]
             )
         }
 
         let payload = try JSONDecoder().decode(
-            AcknowledgementResponse.self,
+            ToolSuccessResponse.self,
             from: data
         )
 
@@ -89,13 +91,17 @@ final class ToolServerClient: @unchecked Sendable {
                 code: 13,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Tool server rejected notification delivery."
+                        "Tool server rejected announcement delivery."
                 ]
             )
         }
     }
 
     func availableTools() async throws -> [ToolDefinition] {
+        if let tools = lock.withLock({ cachedTools }) {
+            return tools
+        }
+
         let url = Config.toolServerURL
             .appendingPathComponent("tools")
 
@@ -106,23 +112,28 @@ final class ToolServerClient: @unchecked Sendable {
             for: request
         )
 
-        guard
-            let http = response as? HTTPURLResponse,
-            200..<300 ~= http.statusCode
+        guard let http = response as? HTTPURLResponse,
+            (200...299).contains(http.statusCode)
         else {
             throw NSError(
                 domain: "ToolServer",
                 code: 1,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Could not load tool definitions from the tool server."
+                        "Could not load tool definitions."
                 ]
             )
         }
 
-        return try JSONDecoder()
+        let tools = try JSONDecoder()
             .decode(ToolListResponse.self, from: data)
             .tools
+
+        lock.withLock {
+            cachedTools = tools
+        }
+
+        return tools
     }
 
     func runTool(_ call: ToolCall) async throws -> String {
@@ -150,8 +161,7 @@ final class ToolServerClient: @unchecked Sendable {
             for: request
         )
 
-        guard
-            let http = response as? HTTPURLResponse,
+        guard let http = response as? HTTPURLResponse,
             (200...299).contains(http.statusCode)
         else {
             let body = String(decoding: data, as: UTF8.self)
