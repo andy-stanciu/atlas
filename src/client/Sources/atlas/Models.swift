@@ -1,6 +1,6 @@
 import Foundation
 
-struct Message: Codable {
+struct Message: Codable, Sendable {
     let role: String
     let content: String
     let toolCalls: [ToolCall]?
@@ -22,29 +22,29 @@ struct Message: Codable {
     }
 }
 
-struct ToolCall: Codable {
+struct ToolCall: Codable, Sendable {
     let type: String?
     let function: ToolFunctionCall
 }
 
-struct ToolFunctionCall: Codable {
+struct ToolFunctionCall: Codable, Sendable {
     let index: Int?
     let name: String
     let arguments: [String: JSONValue]
 }
 
-struct ToolDefinition: Codable {
+struct ToolDefinition: Codable, Sendable {
     let type: String
     let function: ToolFunctionDefinition
 }
 
-struct ToolFunctionDefinition: Codable {
+struct ToolFunctionDefinition: Codable, Sendable {
     let name: String
     let description: String
     let parameters: ToolParameters
 }
 
-struct ToolParameters: Codable {
+struct ToolParameters: Codable, Sendable {
     let type: String
     let required: [String]
     let properties: [String: ToolProperty]
@@ -86,7 +86,7 @@ struct ToolParameters: Codable {
     }
 }
 
-struct ToolProperty: Codable {
+struct ToolProperty: Codable, Sendable {
     let type: String?
     let description: String?
     let enumValues: [String]?
@@ -100,11 +100,11 @@ struct ToolProperty: Codable {
     }
 }
 
-struct ToolSuccessResponse: Decodable {
+struct ToolSuccessResponse: Decodable, Sendable {
     let ok: Bool
 }
 
-struct ToolListResponse: Codable {
+struct ToolListResponse: Codable, Sendable {
     let tools: [ToolDefinition]
 }
 

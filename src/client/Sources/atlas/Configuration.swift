@@ -33,7 +33,7 @@ struct Config {
 
     static let startSpeechFrames = 2
     static let interruptSpeechFrames = 4
-    static let endSilenceFrames = 15
+    static let endSilenceFrames = 20
     static let minimumRecordingBytes = 2_000
     static let preRollMilliseconds = 500
 
