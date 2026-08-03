@@ -658,12 +658,24 @@ final class VoiceAssistant {
     private func isWakeGreeting(_ transcript: String) -> Bool {
         let text = normalizedText(transcript)
 
-        if text == "atlas" || text.hasPrefix("atlas ") {
+        guard !text.isEmpty else {
+            return false
+        }
+
+        let wakeNames = ["atlas", "alice"]
+
+        if wakeNames.contains(text) {
             return true
         }
 
-        return Config.wakeGreetings.contains {
-            text.hasPrefix("\($0) atlas")
+        if wakeNames.contains(where: { text.hasPrefix("\($0) ") }) {
+            return true
+        }
+
+        return Config.wakeGreetings.contains { greeting in
+            wakeNames.contains { wakeName in
+                text.hasPrefix("\(greeting) \(wakeName)")
+            }
         }
     }
 

@@ -5,57 +5,71 @@ enum ConversationClosing {
         userText: String,
         normalizedText: (String) -> String
     ) -> Bool {
-        let text = normalizedText(userText)
+        var text = normalizedText(userText)
 
         guard !text.isEmpty else {
             return false
         }
 
-        let exactPhrases = [
-            "bye",
+        if text.hasSuffix(" atlas") {
+            text = String(text.dropLast(" atlas".count))
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        let phrases = [
+            "talk to you later",
+            "catch you later",
+            "please end the conversation",
+            "end this conversation",
+            "end the conversation",
+            "you can end the conversation",
+            "you can stop now",
+            "that is everything",
+            "thats everything",
+            "that is all",
+            "thats all",
+            "that is it",
+            "thats it",
+            "no thank you",
+            "no thanks",
+            "thank you",
             "bye bye",
             "goodbye",
             "see you",
             "see ya",
-            "talk to you later",
-            "catch you later",
-            "thats all",
-            "that is all",
-            "thats it",
-            "that is it",
-            "thats everything",
-            "that is everything",
             "all done",
             "nothing else",
-            "im all set",
             "i am all set",
-            "im done",
+            "im all set",
             "i am done",
-            "were done",
+            "im done",
             "we are done",
-            "no thanks",
-            "no thank you",
+            "were done",
             "thanks",
-            "thank you",
-            "please end the conversation",
-            "end the conversation",
-            "end this conversation",
-            "you can end the conversation",
-            "you can stop now",
+            "bye",
         ]
 
-        if exactPhrases.contains(text) {
-            return true
+        var remaining = text
+        var matchedClosing = false
+
+        while let phrase = phrases.first(
+            where: {
+                remaining == $0
+                    || remaining.hasSuffix(" " + $0)
+            }
+        ) {
+            matchedClosing = true
+
+            if remaining == phrase {
+                return true
+            }
+
+            remaining = String(
+                remaining.dropLast(phrase.count)
+            )
+            .trimmingCharacters(in: .whitespaces)
         }
 
-        guard text.hasSuffix(" atlas") else {
-            return false
-        }
-
-        let phraseWithoutAtlas = String(
-            text.dropLast(" atlas".count)
-        )
-
-        return exactPhrases.contains(phraseWithoutAtlas)
+        return matchedClosing
     }
 }

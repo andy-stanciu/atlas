@@ -126,7 +126,7 @@ final class ConversationEngine: @unchecked Sendable {
         var activeReminderAcknowledged = false
         var retriedReminderAcknowledgement = false
 
-        for _ in 0..<maxSteps {
+        for step in 0..<maxSteps {
             let assistantMessage = try await ollama.chat(
                 messages: messages,
                 tools: tools
@@ -143,12 +143,26 @@ final class ConversationEngine: @unchecked Sendable {
             )
 
             if !calls.isEmpty {
+                print("\n[tool loop] step \(step + 1)")
+                print(
+                    "[tool loop] tool calls: "
+                        + String(
+                            describing: calls.map(\.function.name)
+                        )
+                )
+                fflush(stdout)
+
                 for call in calls {
                     attemptedToolNames.append(call.function.name)
                     toolCalls.append(call)
 
                     let result = try await toolServer.runTool(call)
                     toolResults.append(result)
+
+                    print(
+                        "[tool result] \(call.function.name): \(result)"
+                    )
+                    fflush(stdout)
 
                     if toolSucceeded(result) {
                         successfulToolNames.append(call.function.name)
