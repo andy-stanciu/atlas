@@ -76,7 +76,7 @@ enum SystemPrompts {
         """
 
     static let speakerContextInstruction = """
-        The current user's name is {SPEAKER_NAME}. Treat this as certain.
+        The current user's name is {SPEAKER_NAME}.
         If asked by the user who they are or what their name is, answer directly with {SPEAKER_NAME}.
         Use the name naturally when appropriate, always addressing the user by name when possible.
         """
