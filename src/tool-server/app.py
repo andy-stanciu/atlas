@@ -1,3 +1,4 @@
+from speaker_service import SpeakerError, SpeakerService
 import logging
 from flask import Flask, jsonify, request
 from config import HOST, PORT, SCHEDULER_INTERVAL_SECONDS, TOOLS_PATH
@@ -20,6 +21,7 @@ def create_app():
 
     repository = Repository()
     repository.initialize()
+    speaker_service = SpeakerService(repository)
 
     lights = LightService()
     service = AtlasService(repository)
@@ -29,6 +31,7 @@ def create_app():
     app.extensions["repository"] = repository
     app.extensions["registry"] = registry
     app.extensions["scheduler"] = scheduler
+    app.extensions["speaker_service"] = speaker_service
 
     @app.get("/health")
     def health():
@@ -65,6 +68,72 @@ def create_app():
         if repository.deliver_announcement(speech_id):
             return jsonify(ok=True, speech_id=speech_id, status="delivered")
         return jsonify(ok=False, error="Active announcement was not found."), 404
+
+    @app.get("/speaker/profiles")
+    def speaker_profiles():
+        return jsonify(speaker_service.profiles_response())
+
+    @app.post("/speaker/enroll")
+    def enroll_speaker():
+        try:
+            return jsonify(
+                speaker_service.enroll_from_uploads(
+                    display_name=request.form.get("name", ""),
+                    uploads=request.files.getlist("audio"),
+                )
+            )
+        except SpeakerError as error:
+            return jsonify(
+                ok=False,
+                error=str(error),
+            ), error.status_code
+        except Exception:
+            app.logger.exception("Speaker enrollment failed.")
+            return jsonify(
+                ok=False,
+                error="Speaker enrollment failed.",
+            ), 500
+
+    @app.post("/speaker/<int:profile_id>/samples")
+    def add_speaker_sample(profile_id):
+        try:
+            return jsonify(
+                speaker_service.add_sample_from_uploads(
+                    profile_id=profile_id,
+                    uploads=request.files.getlist("audio"),
+                )
+            )
+        except SpeakerError as error:
+            return jsonify(
+                ok=False,
+                error=str(error),
+            ), error.status_code
+        except Exception:
+            app.logger.exception("Speaker sample addition failed.")
+            return jsonify(
+                ok=False,
+                error="Speaker sample addition failed.",
+            ), 500
+
+    @app.post("/speaker/identify")
+    def identify_speaker():
+        try:
+            return jsonify(
+                speaker_service.identify_from_uploads(
+                    uploads=request.files.getlist("audio"),
+                )
+            )
+        except SpeakerError as error:
+            return jsonify(
+                ok=False,
+                error=str(error),
+            ), error.status_code
+        except Exception:
+            app.logger.exception("Speaker identification failed.")
+            return jsonify(
+                ok=False,
+                error="Speaker identification failed.",
+            ), 500
 
     @app.errorhandler(404)
     def not_found(_):

@@ -1,11 +1,13 @@
 import json
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from db import Base, Session, engine
 from models import (
     ReminderRow,
     ReminderStatus,
     SequenceRow,
     SequenceStatus,
+    SpeakerProfileRow,
+    SpeakerSampleRow,
     SpeechItemRow,
     SpeechKind,
     SpeechStatus,
@@ -256,3 +258,136 @@ class Repository:
             )
 
             return item.reminder_id if result.rowcount == 1 else None
+
+    def create_speaker_profile(
+        self,
+        display_name,
+        normalized_name,
+        samples,
+        max_samples,
+    ):
+        now = to_storage(now_utc())
+
+        with Session.begin() as session:
+            profile_exists = (
+                session.scalars(
+                    select(SpeakerProfileRow.id)
+                    .where(SpeakerProfileRow.normalized_name == normalized_name)
+                    .limit(1)
+                ).first()
+                is not None
+            )
+
+            if profile_exists:
+                return None
+
+            profile = SpeakerProfileRow(
+                display_name=display_name,
+                normalized_name=normalized_name,
+                created_at_utc=now,
+                updated_at_utc=now,
+            )
+            session.add(profile)
+            session.flush()
+
+            for sample in samples[-max_samples:]:
+                profile.samples.append(
+                    SpeakerSampleRow(
+                        embedding_json=json.dumps(sample["embedding"]),
+                        duration_seconds=sample["duration_seconds"],
+                        created_at_utc=now,
+                    )
+                )
+
+            session.flush()
+
+            return {
+                "id": profile.id,
+                "display_name": profile.display_name,
+                "sample_count": len(profile.samples),
+            }
+
+    def add_speaker_sample(
+        self,
+        profile_id,
+        embedding,
+        duration_seconds,
+        max_samples,
+    ):
+        now = to_storage(now_utc())
+
+        with Session.begin() as session:
+            profile = session.get(SpeakerProfileRow, profile_id)
+
+            if profile is None:
+                return None
+
+            rows = session.scalars(
+                select(SpeakerSampleRow)
+                .where(SpeakerSampleRow.speaker_id == profile_id)
+                .order_by(SpeakerSampleRow.created_at_utc, SpeakerSampleRow.id)
+            ).all()
+
+            if len(rows) >= max_samples:
+                for row in rows[: len(rows) - max_samples + 1]:
+                    session.delete(row)
+
+            session.add(
+                SpeakerSampleRow(
+                    speaker_id=profile_id,
+                    embedding_json=json.dumps(embedding),
+                    duration_seconds=duration_seconds,
+                    created_at_utc=now,
+                )
+            )
+
+            profile.updated_at_utc = now
+            session.flush()
+
+            sample_count = session.scalar(
+                select(func.count(SpeakerSampleRow.id)).where(
+                    SpeakerSampleRow.speaker_id == profile_id
+                )
+            )
+
+            return {
+                "id": profile.id,
+                "display_name": profile.display_name,
+                "sample_count": sample_count,
+            }
+
+    def list_speaker_profiles(self):
+        with Session() as session:
+            profiles = session.scalars(
+                select(SpeakerProfileRow).order_by(SpeakerProfileRow.display_name)
+            ).all()
+
+            return [
+                {
+                    "id": profile.id,
+                    "display_name": profile.display_name,
+                    "created_at_utc": profile.created_at_utc,
+                    "updated_at_utc": profile.updated_at_utc,
+                    "sample_count": len(profile.samples),
+                }
+                for profile in profiles
+            ]
+
+    def speaker_profiles_for_matching(self):
+        with Session() as session:
+            profiles = session.scalars(select(SpeakerProfileRow)).all()
+
+            return [
+                {
+                    "id": profile.id,
+                    "display_name": profile.display_name,
+                    "samples": [
+                        {
+                            "embedding": json.loads(sample.embedding_json),
+                            "duration_seconds": sample.duration_seconds,
+                        }
+                        for sample in profile.samples
+                    ],
+                }
+                for profile in profiles
+            ]

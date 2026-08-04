@@ -9,6 +9,7 @@ uv.lock
 
 # Tool-server runtime state
 src/tool-server/data/
+src/tool-server/temp-audio/
 
 # macOS
 .DS_Store

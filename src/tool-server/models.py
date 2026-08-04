@@ -1,6 +1,6 @@
 from enum import StrEnum
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db import Base
 
 
@@ -96,3 +96,43 @@ class SpeechItemRow(Base):
 
 
 Index("speech_queue", SpeechItemRow.status, SpeechItemRow.created_at_utc)
+
+
+class SpeakerProfileRow(Base):
+    __tablename__ = "speaker_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "normalized_name",
+            name="one_profile_per_speaker_name",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    display_name: Mapped[str] = mapped_column(String, nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String, nullable=False)
+    created_at_utc: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at_utc: Mapped[str] = mapped_column(String, nullable=False)
+
+    samples: Mapped[list["SpeakerSampleRow"]] = relationship(
+        back_populates="profile",
+        cascade="all, delete-orphan",
+    )
+
+
+class SpeakerSampleRow(Base):
+    __tablename__ = "speaker_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    speaker_id: Mapped[int] = mapped_column(
+        ForeignKey("speaker_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at_utc: Mapped[str] = mapped_column(String, nullable=False)
+
+    profile: Mapped[SpeakerProfileRow] = relationship(back_populates="samples")
