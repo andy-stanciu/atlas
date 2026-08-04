@@ -3,6 +3,7 @@ import Foundation
 extension VoiceAssistant {
     func streamOllama(
         _ userText: String,
+        turnID: UUID,
         onSentence: @escaping (String) async throws -> Void
     ) async throws -> String {
         let activeReminder = await notificationCoordinator?
@@ -12,7 +13,13 @@ extension VoiceAssistant {
 
         let engine = ConversationEngine(
             ollama: ollama,
-            toolServer: toolServer
+            toolServer: toolServer,
+            onToolBatch: { [weak self] _ in
+                guard let self else {
+                    return
+                }
+                await self.playToolCue(for: turnID)
+            }
         )
 
         let result = try await engine.respond(
@@ -20,6 +27,8 @@ extension VoiceAssistant {
             history: snapshot,
             activeReminderText: activeReminder?.text
         )
+
+        try Task.checkCancellation()
 
         if result.successfulToolNames.contains(
             "acknowledge_reminder"
@@ -31,14 +40,22 @@ extension VoiceAssistant {
         let accumulator = SentenceAccumulator()
 
         for sentence in accumulator.append(result.reply) {
+            try Task.checkCancellation()
             try await onSentence(sentence)
         }
 
         if let remaining = accumulator.finish() {
+            try Task.checkCancellation()
             try await onSentence(remaining)
         }
 
+        try Task.checkCancellation()
+
         lock.withLock {
+            guard isCurrentTurn(turnID) else {
+                return
+            }
+
             history = result.finalMessages
 
             if history.count > Config.maxHistoryMessages + 1 {

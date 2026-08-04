@@ -9,14 +9,20 @@ enum SpeechPlaybackOutcome: Equatable {
     case failed
 }
 
+enum PlaybackPurpose: Equatable {
+    case thinkingFiller
+    case assistantReply
+    case scheduledSpeech
+}
+
 final class AudioPlayback: @unchecked Sendable {
     private let player: AVAudioPlayerNode
     private let kokoro: KokoroWorker
     private let queue: DispatchQueue
     private let voiceFormat: AVAudioFormat
 
-    private let beginSpeaking: () -> Bool
-    private let finishSpeaking: () -> Void
+    private let beginSpeaking: (PlaybackPurpose) -> Bool
+    private let finishSpeaking: (PlaybackPurpose) -> Void
     private let beginScheduledSpeech: () -> Bool
 
     init(
@@ -24,8 +30,8 @@ final class AudioPlayback: @unchecked Sendable {
         kokoro: KokoroWorker,
         queue: DispatchQueue,
         voiceFormat: AVAudioFormat,
-        beginSpeaking: @escaping () -> Bool,
-        finishSpeaking: @escaping () -> Void,
+        beginSpeaking: @escaping (PlaybackPurpose) -> Bool,
+        finishSpeaking: @escaping (PlaybackPurpose) -> Void,
         beginScheduledSpeech: @escaping () -> Bool
     ) {
         self.player = player
@@ -37,25 +43,30 @@ final class AudioPlayback: @unchecked Sendable {
         self.beginScheduledSpeech = beginScheduledSpeech
     }
 
-    func queueNormalSpeech(_ text: String) async throws {
-        let wavURL = try await synthesize(text)
+    func queueThinkingFiller(
+        _ text: String,
+        for turnID: UUID,
+        isCurrentTurn: @escaping @Sendable (UUID) -> Bool
+    ) async throws {
+        try await queueSpeech(
+            text,
+            purpose: .thinkingFiller,
+            turnID: turnID,
+            isCurrentTurn: isCurrentTurn
+        )
+    }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self else {
-                try? FileManager.default.removeItem(at: wavURL)
-                return
-            }
-
-            do {
-                try self.queueWAV(wavURL)
-            } catch {
-                try? FileManager.default.removeItem(at: wavURL)
-                print(
-                    "\nSpeech queue error: "
-                        + error.localizedDescription
-                )
-            }
-        }
+    func queueAssistantReply(
+        _ text: String,
+        for turnID: UUID,
+        isCurrentTurn: @escaping @Sendable (UUID) -> Bool
+    ) async throws {
+        try await queueSpeech(
+            text,
+            purpose: .assistantReply,
+            turnID: turnID,
+            isCurrentTurn: isCurrentTurn
+        )
     }
 
     func speakScheduled(
@@ -65,7 +76,7 @@ final class AudioPlayback: @unchecked Sendable {
         let wavURL = try await synthesize(text)
 
         return await withCheckedContinuation { continuation in
-            DispatchQueue.main.async { [weak self] in
+            queue.async { [weak self] in
                 guard let self else {
                     try? FileManager.default.removeItem(at: wavURL)
                     continuation.resume(returning: .notStarted)
@@ -86,8 +97,53 @@ final class AudioPlayback: @unchecked Sendable {
         }
     }
 
-    private func synthesize(_ text: String) async throws -> URL {
+    private func queueSpeech(
+        _ text: String,
+        purpose: PlaybackPurpose,
+        turnID: UUID,
+        isCurrentTurn: @escaping @Sendable (UUID) -> Bool
+    ) async throws {
+        let wavURL = try await synthesize(text)
+
+        guard isCurrentTurn(turnID) else {
+            try? FileManager.default.removeItem(at: wavURL)
+            return
+        }
+
         try await withCheckedThrowingContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self else {
+                    try? FileManager.default.removeItem(at: wavURL)
+                    continuation.resume()
+                    return
+                }
+
+                guard isCurrentTurn(turnID) else {
+                    try? FileManager.default.removeItem(at: wavURL)
+                    continuation.resume()
+                    return
+                }
+
+                do {
+                    try self.queueWAV(
+                        wavURL,
+                        purpose: purpose,
+                        turnID: turnID,
+                        isCurrentTurn: isCurrentTurn
+                    )
+                    continuation.resume()
+                } catch {
+                    try? FileManager.default.removeItem(at: wavURL)
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func synthesize(_ text: String) async throws -> URL {
+        try Task.checkCancellation()
+
+        return try await withCheckedThrowingContinuation { continuation in
             queue.async { [kokoro] in
                 do {
                     let startedAt = CACurrentMediaTime()
@@ -107,10 +163,20 @@ final class AudioPlayback: @unchecked Sendable {
         }
     }
 
-    private func queueWAV(_ wavURL: URL) throws {
+    private func queueWAV(
+        _ wavURL: URL,
+        purpose: PlaybackPurpose,
+        turnID: UUID,
+        isCurrentTurn: @escaping @Sendable (UUID) -> Bool
+    ) throws {
         let outputBuffer = try makeOutputBuffer(from: wavURL)
 
-        guard beginSpeaking() else {
+        guard isCurrentTurn(turnID) else {
+            try? FileManager.default.removeItem(at: wavURL)
+            return
+        }
+
+        guard beginSpeaking(purpose) else {
             try? FileManager.default.removeItem(at: wavURL)
             return
         }
@@ -121,17 +187,15 @@ final class AudioPlayback: @unchecked Sendable {
             options: []
         ) { [weak self] in
             try? FileManager.default.removeItem(at: wavURL)
-
-            DispatchQueue.main.async {
-                self?.finishSpeaking()
+            DispatchQueue.global(
+                qos: .userInitiated
+            ).async {
+                self?.finishSpeaking(purpose)
             }
         }
 
-        player.volume = 0.9
-
-        if !player.isPlaying {
-            player.play()
-        }
+        player.volume = Config.speakingVolume
+        player.play()
     }
 
     private func playScheduledWAV(
@@ -154,17 +218,16 @@ final class AudioPlayback: @unchecked Sendable {
         ) { [weak self] in
             try? FileManager.default.removeItem(at: wavURL)
 
-            DispatchQueue.main.async {
-                self?.finishSpeaking()
+            DispatchQueue.global(
+                qos: .userInitiated
+            ).async {
+                self?.finishSpeaking(.scheduledSpeech)
                 continuation.resume(returning: .completed)
             }
         }
 
-        player.volume = 0.9
-
-        if !player.isPlaying {
-            player.play()
-        }
+        player.volume = Config.speakingVolume
+        player.play()
 
         Task {
             await onStarted()
@@ -211,10 +274,7 @@ final class AudioPlayback: @unchecked Sendable {
             )
         }
 
-        let ratio =
-            voiceFormat.sampleRate
-            / file.processingFormat.sampleRate
-
+        let ratio = voiceFormat.sampleRate / file.processingFormat.sampleRate
         let outputCapacity =
             AVAudioFrameCount(
                 Double(sourceBuffer.frameLength) * ratio

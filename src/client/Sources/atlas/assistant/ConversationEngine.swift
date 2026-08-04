@@ -47,6 +47,7 @@ final class ConversationEngine: @unchecked Sendable {
     private let maxSteps: Int
     private let systemPrompt: String
     private let normalize: (String) -> String
+    private let onToolBatch: @Sendable ([ToolCall]) async -> Void
 
     init(
         ollama: any OllamaServing,
@@ -76,13 +77,14 @@ final class ConversationEngine: @unchecked Sendable {
                 .trimmingCharacters(
                     in: .whitespacesAndNewlines
                 )
-        }
+        }, onToolBatch: @escaping @Sendable ([ToolCall]) async -> Void = { _ in }
     ) {
         self.ollama = ollama
         self.toolServer = toolServer
         self.maxSteps = maxSteps
         self.systemPrompt = systemPrompt
         self.normalize = normalize
+        self.onToolBatch = onToolBatch
     }
 
     func respond(
@@ -127,6 +129,7 @@ final class ConversationEngine: @unchecked Sendable {
         var retriedReminderAcknowledgement = false
 
         for step in 0..<maxSteps {
+            try Task.checkCancellation()
             let assistantMessage = try await ollama.chat(
                 messages: messages,
                 tools: tools
@@ -151,12 +154,14 @@ final class ConversationEngine: @unchecked Sendable {
                         )
                 )
                 fflush(stdout)
-
+                await onToolBatch(toolCalls)
                 for call in calls {
+                    try Task.checkCancellation()
                     attemptedToolNames.append(call.function.name)
                     toolCalls.append(call)
 
                     let result = try await toolServer.runTool(call)
+                    try Task.checkCancellation()
                     toolResults.append(result)
 
                     print(

@@ -8,7 +8,10 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "atlas"
+            name: "atlas",
+            resources: [
+                .copy("resources")
+            ]
         )
     ]
 )

@@ -50,6 +50,28 @@ struct Config {
 
     static let maxHistoryMessages = 10
 
+    static let thinkingFillers = [
+        "One second, please.",
+        "One moment, please.",
+        "Let me think.",
+        "I'm thinking, one second.",
+        "I'm thinking, one moment.",
+        "Give me a moment.",
+        "Give me a second.",
+        "One second.",
+        "One moment.",
+        "Just a moment.",
+        "Just a second.",
+        "Just a moment, please.",
+        "Give me a second.",
+    ]
+
+    static let sfxVolume: Float = 0.7
+    static let speakingVolume: Float = 0.9
+    static let toolCueFrequency1: Double = 880
+    static let toolCueFrequency2: Double = 1_320
+    static let toolCueDuration: TimeInterval = 0.14
+
     static let systemPrompt = """
         # Overview
         Your name is Atlas. You are a concise, helpful voice assistant that has control 
