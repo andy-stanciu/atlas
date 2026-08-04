@@ -487,12 +487,8 @@ final class VoiceAssistant {
                 try? FileManager.default.removeItem(at: wavURL)
             }
 
-            // Start both the STT and speaker identification tasks concurrently
             async let transcriptTask = timed("STT") {
                 try await whisper.transcribe(wavURL)
-            }
-            async let speakerResponseTask = timed("Speaker ID") {
-                try await speakerClient.identify(wavURL)
             }
             let transcript = try await transcriptTask
 
@@ -540,7 +536,12 @@ final class VoiceAssistant {
                 cancelConversationTimeout()
             }
 
-            let speakerIdentity = try? await speakerResponseTask.identity
+            let speakerResponseTask = Task { [speakerClient] in
+                try await timed("Speaker ID") {
+                    try await speakerClient.identify(wavURL)
+                }
+            }
+            let speakerIdentity = try? await speakerResponseTask.value.identity
             if let speakerIdentity {
                 print(
                     "[speaker] known: \(speakerIdentity.displayName) "
