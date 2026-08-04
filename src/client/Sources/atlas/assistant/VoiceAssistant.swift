@@ -1009,9 +1009,6 @@ final class VoiceAssistant {
         guard isCurrentTurn(turnID) else {
             return
         }
-
         soundEffects.play("tool_call")
-        print("[tool cue]")
-        fflush(stdout)
     }
 }
