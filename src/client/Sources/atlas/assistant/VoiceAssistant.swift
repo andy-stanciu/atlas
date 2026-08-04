@@ -27,6 +27,7 @@ final class VoiceAssistant {
     private let whisper = WhisperClient()
     let ollama = OllamaClient()
     let toolServer = ToolServerClient()
+    private let speakerClient = SpeakerClient()
 
     private var playback: AudioPlayback!
     var notificationCoordinator: NotificationCoordinator?
@@ -49,13 +50,14 @@ final class VoiceAssistant {
 
     private var activeTurnID: UUID?
     private var activeTurnText: String?
+    private var activeTurnSpeaker: SpeakerIdentity?
     private var generationTask: Task<Void, Never>?
     private var currentPlaybackPurpose: PlaybackPurpose?
     private var pendingMergedText: String?
     private var lastThinkingFiller: String?
 
     var history = [
-        Message(role: "system", content: Config.systemPrompt)
+        Message(role: "system", content: SystemPrompts.mainSystemPrompt)
     ]
 
     init() throws {
@@ -411,6 +413,7 @@ final class VoiceAssistant {
                 generationTask?.cancel()
                 activeTurnID = nil
                 activeTurnText = nil
+                activeTurnSpeaker = nil
                 currentPlaybackPurpose = nil
 
                 state = .recording
@@ -484,9 +487,14 @@ final class VoiceAssistant {
                 try? FileManager.default.removeItem(at: wavURL)
             }
 
-            let transcript = try await timed("STT") {
+            // Start both the STT and speaker identification tasks concurrently
+            async let transcriptTask = timed("STT") {
                 try await whisper.transcribe(wavURL)
             }
+            async let speakerResponseTask = timed("Speaker ID") {
+                try await speakerClient.identify(wavURL)
+            }
+            let transcript = try await transcriptTask
 
             guard !transcript.isEmpty else {
                 print("\nNo speech recognized.")
@@ -532,6 +540,16 @@ final class VoiceAssistant {
                 cancelConversationTimeout()
             }
 
+            let speakerIdentity = try? await speakerResponseTask.identity
+            if let speakerIdentity {
+                print(
+                    "[speaker] known: \(speakerIdentity.displayName) "
+                        + "(similarity=\(String(format: "%.3f", speakerIdentity.similarity))))"
+                )
+            } else {
+                print("[speaker] unknown or unavailable")
+            }
+
             let activeReminder = await notificationCoordinator?
                 .acknowledgementEligibleReminderSnapshot()
 
@@ -541,18 +559,24 @@ final class VoiceAssistant {
                     normalizedText: normalizedText
                 )
             {
-                try await closeConversation()
+                try await closeConversation(speaker: speakerIdentity)
                 return
             }
 
             let turnID = UUID()
-
             lock.withLock {
                 activeTurnID = turnID
                 activeTurnText = userText
+                activeTurnSpeaker = speakerIdentity
             }
 
-            print("\nYou: \(userText)")
+            if speakerIdentity == nil {
+                print("\nYou: \(userText)")
+            } else {
+                print(
+                    "\n\(speakerIdentity!.displayName): \(userText)"
+                )
+            }
             print("Atlas: ", terminator: "")
             fflush(stdout)
 
@@ -588,7 +612,10 @@ final class VoiceAssistant {
                 do {
                     let fullReply = try await self.streamOllama(
                         userText,
-                        turnID: turnID
+                        turnID: turnID,
+                        speakerInstruction: speakerIdentity.map {
+                            self.speakerContextInstruction(for: $0)
+                        } ?? nil
                     ) { [weak self] sentence in
                         guard let self else {
                             return
@@ -686,8 +713,43 @@ final class VoiceAssistant {
         }
     }
 
-    private func closeConversation() async throws {
-        let farewell = try await ollama.generateFarewell()
+    private func speakerContextInstruction(
+        for speaker: SpeakerIdentity?
+    ) -> String? {
+        guard let speaker else {
+            return nil
+        }
+        return SystemPrompts.speakerContextInstruction
+            .replacingOccurrences(
+                of: "{SPEAKER_NAME}",
+                with: speaker.displayName
+            )
+    }
+
+    private func speakerFarewellInstruction(
+        for speaker: SpeakerIdentity?
+    ) -> String? {
+        guard let speaker else {
+            return nil
+        }
+
+        return SystemPrompts.speakerFarewellInstruction
+            .replacingOccurrences(
+                of: "{SPEAKER_NAME}",
+                with: speaker.displayName
+            )
+    }
+
+    private func closeConversation(
+        speaker: SpeakerIdentity? = nil
+    ) async throws {
+        let farewellInstruction = speakerFarewellInstruction(
+            for: speaker
+        )
+
+        let farewell = try await ollama.generateFarewell(
+            speakerInstruction: farewellInstruction
+        )
 
         guard !farewell.isEmpty else {
             endConversation()
@@ -699,11 +761,15 @@ final class VoiceAssistant {
         fflush(stdout)
 
         let turnID = UUID()
+
         lock.withLock {
             activeTurnID = turnID
             activeTurnText = nil
+            activeTurnSpeaker = speaker
         }
+
         scheduleConversationEndAfterSpeech()
+
         try await playback.queueAssistantReply(
             farewell,
             for: turnID,
@@ -721,7 +787,7 @@ final class VoiceAssistant {
             conversationTimeoutWorkItem = nil
 
             history = [
-                Message(role: "system", content: Config.systemPrompt)
+                Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
         soundEffects.play("startup")
@@ -736,7 +802,7 @@ final class VoiceAssistant {
             conversationTimeoutWorkItem = nil
 
             history = [
-                Message(role: "system", content: Config.systemPrompt)
+                Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
 
@@ -780,13 +846,14 @@ final class VoiceAssistant {
             conversationTimeoutWorkItem = nil
 
             history = [
-                Message(role: "system", content: Config.systemPrompt)
+                Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
 
             generationTask?.cancel()
             generationTask = nil
             activeTurnID = nil
             activeTurnText = nil
+            activeTurnSpeaker = nil
             pendingMergedText = nil
             currentPlaybackPurpose = nil
 
@@ -820,6 +887,7 @@ final class VoiceAssistant {
             activeTurnText = nil
             pendingMergedText = nil
             currentPlaybackPurpose = nil
+            activeTurnSpeaker = nil
             clearPreRoll()
         }
     }

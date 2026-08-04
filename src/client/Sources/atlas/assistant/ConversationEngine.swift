@@ -53,7 +53,7 @@ final class ConversationEngine: @unchecked Sendable {
         ollama: any OllamaServing,
         toolServer: any ToolServing,
         maxSteps: Int = Config.maxToolLoopSteps,
-        systemPrompt: String = Config.systemPrompt,
+        systemPrompt: String = SystemPrompts.mainSystemPrompt,
         normalize: @escaping (String) -> String = {
             $0.lowercased()
                 .replacingOccurrences(
@@ -90,11 +90,21 @@ final class ConversationEngine: @unchecked Sendable {
     func respond(
         to userText: String,
         history: [Message] = [
-            Message(role: "system", content: Config.systemPrompt)
+            Message(role: "system", content: SystemPrompts.mainSystemPrompt)
         ],
-        activeReminderText: String? = nil
+        activeReminderText: String? = nil,
+        speakerInstruction: String? = nil
     ) async throws -> ConversationResult {
         var messages = history
+
+        if let speakerInstruction {
+            messages.append(
+                Message(
+                    role: "system",
+                    content: speakerInstruction
+                )
+            )
+        }
 
         if let activeReminderText {
             messages.append(

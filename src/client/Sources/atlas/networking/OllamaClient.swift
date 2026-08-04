@@ -3,7 +3,8 @@ import Foundation
 final class OllamaClient: @unchecked Sendable {
     func chat(
         messages: [Message],
-        tools: [ToolDefinition]
+        tools: [ToolDefinition],
+        temperature: Double = Config.ollamaDefaultTemperature,
     ) async throws -> Message {
         let payload = OllamaRequest(
             model: Config.ollamaModel,
@@ -12,7 +13,7 @@ final class OllamaClient: @unchecked Sendable {
             messages: messages,
             options: .init(
                 num_ctx: 8192,
-                temperature: 0.2,
+                temperature: temperature,
                 num_predict: 400
             ),
             tools: tools
@@ -117,7 +118,7 @@ final class OllamaClient: @unchecked Sendable {
             messages: [
                 Message(
                     role: "system",
-                    content: Config.systemPrompt
+                    content: SystemPrompts.mainSystemPrompt
                 ),
                 Message(
                     role: "system",
@@ -128,7 +129,7 @@ final class OllamaClient: @unchecked Sendable {
                     content: "Speech text: \(text)"
                 ),
             ],
-            tools: []
+            tools: [],
         )
 
         let speech = response.content.trimmingCharacters(
@@ -146,20 +147,38 @@ final class OllamaClient: @unchecked Sendable {
         return speech
     }
 
-    func generateFarewell() async throws -> String {
+    func generateFarewell(
+        speakerInstruction: String? = nil
+    ) async throws -> String {
+        var messages = [
+            Message(
+                role: "system",
+                content: SystemPrompts.mainSystemPrompt
+            ),
+            Message(
+                role: "system",
+                content: SystemPrompts.farewellInstruction
+            ),
+        ]
+
+        if let speakerInstruction {
+            messages.append(
+                Message(
+                    role: "system",
+                    content: speakerInstruction
+                )
+            )
+        }
+
+        messages.append(
+            Message(role: "user", content: "Goodbye, Atlas.")
+        )
+
+        // Use a higher temperature for farewells to encourage more variety and naturalness.
         let response = try await chat(
-            messages: [
-                Message(
-                    role: "system",
-                    content: Config.systemPrompt
-                ),
-                Message(
-                    role: "system",
-                    content: SystemPrompts.farewellInstruction
-                ),
-                Message(role: "user", content: "Goodbye."),
-            ],
-            tools: []
+            messages: messages,
+            tools: [],
+            temperature: 0.5
         )
 
         return response.content.trimmingCharacters(

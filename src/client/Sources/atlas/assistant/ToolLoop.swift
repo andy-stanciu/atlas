@@ -4,6 +4,7 @@ extension VoiceAssistant {
     func streamOllama(
         _ userText: String,
         turnID: UUID,
+        speakerInstruction: String? = nil,
         onSentence: @escaping (String) async throws -> Void
     ) async throws -> String {
         let activeReminder = await notificationCoordinator?
@@ -25,7 +26,8 @@ extension VoiceAssistant {
         let result = try await engine.respond(
             to: userText,
             history: snapshot,
-            activeReminderText: activeReminder?.text
+            activeReminderText: activeReminder?.text,
+            speakerInstruction: speakerInstruction
         )
 
         try Task.checkCancellation()
@@ -56,7 +58,11 @@ extension VoiceAssistant {
                 return
             }
 
-            history = result.finalMessages
+            // Update history with the final messages from the conversation result, 
+            // filtering out any messages that contain speaker identity information.
+            history = result.finalMessages.filter {
+                !$0.content.contains("Speaker identity for this request is")
+            }
 
             if history.count > Config.maxHistoryMessages + 1 {
                 history.removeSubrange(

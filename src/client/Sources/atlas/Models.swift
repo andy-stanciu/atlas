@@ -164,3 +164,52 @@ struct ActionEnvelopeToolCall: Decodable {
     let name: String
     let arguments: [String: JSONValue]
 }
+
+enum SpeakerIdentificationStatus: String, Codable, Sendable {
+    case known
+    case uncertain
+    case unknown
+}
+
+struct SpeakerIdentity: Equatable, Sendable {
+    let id: Int
+    let displayName: String
+    let similarity: Double
+}
+
+struct SpeakerIdentificationResponse: Decodable, Sendable {
+    let ok: Bool
+    let status: SpeakerIdentificationStatus
+    let profileID: Int?
+    let displayName: String?
+    let similarity: Double?
+    let durationSeconds: Double?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case status
+        case profileID = "profile_id"
+        case displayName = "display_name"
+        case similarity
+        case durationSeconds = "duration_seconds"
+        case error
+    }
+
+    var identity: SpeakerIdentity? {
+        guard ok,
+            status == .known,
+            let profileID,
+            let displayName,
+            let similarity
+        else {
+            return nil
+        }
+
+        return SpeakerIdentity(
+            id: profileID,
+            displayName: displayName,
+            similarity: similarity
+        )
+    }
+}
