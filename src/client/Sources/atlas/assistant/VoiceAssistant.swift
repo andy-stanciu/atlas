@@ -164,6 +164,15 @@ final class VoiceAssistant {
                     return .failed
                 }
 
+                let effectName: String
+                switch speech.kind {
+                case .reminder:
+                    effectName = "reminder"
+                case .announcement:
+                    effectName = "announcement"
+                }
+                self.soundEffects.play(effectName)
+
                 return try await self.playback.speakScheduled(
                     spokenText,
                     onStarted: { [weak self] in
@@ -352,12 +361,6 @@ final class VoiceAssistant {
             speechFrames = voiced ? speechFrames + 1 : 0
 
             if speechFrames >= Config.startSpeechFrames {
-                if activeTurnID != nil {
-                    generationTask?.cancel()
-                    pendingMergedText = activeTurnText
-                    activeTurnID = nil
-                    activeTurnText = nil
-                }
                 state = .recording
                 recording = joinedPreRoll()
                 silenceFrames = 0
@@ -453,6 +456,17 @@ final class VoiceAssistant {
                     sampleRate: completedSampleRate
                 )
             }
+        }
+    }
+
+    private func finishGeneration(
+        for turnID: UUID
+    ) {
+        lock.withLock {
+            guard activeTurnID == turnID else {
+                return
+            }
+            generationTask = nil
         }
     }
 
@@ -564,6 +578,9 @@ final class VoiceAssistant {
                 guard let self else {
                     return
                 }
+                defer {
+                    self.finishGeneration(for: turnID)
+                }
 
                 let startedAt = CACurrentMediaTime()
                 var printedAnyText = false
@@ -644,6 +661,10 @@ final class VoiceAssistant {
 
             lock.withLock {
                 generationTask?.cancel()
+                guard activeTurnID == turnID else {
+                    task.cancel()
+                    return
+                }
                 generationTask = task
             }
         } catch {
@@ -703,7 +724,7 @@ final class VoiceAssistant {
                 Message(role: "system", content: Config.systemPrompt)
             ]
         }
-
+        soundEffects.play("startup")
         print("\nAtlas is listening.")
     }
 
@@ -773,6 +794,7 @@ final class VoiceAssistant {
         }
 
         if didEnd {
+            soundEffects.play("shutdown")
             print("\nAtlas conversation ended. Say “Hey Atlas” to start again.")
         }
     }
