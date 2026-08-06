@@ -196,22 +196,21 @@ final class VoiceAssistant {
                 guard !spokenText.isEmpty else {
                     return .failed
                 }
-
-                let effectName: String
-                switch speech.kind {
-                case .reminder:
-                    effectName = "reminder"
-                case .announcement:
-                    effectName = "announcement"
-                }
-                self.soundEffects.play(effectName)
-
                 return try await self.playback.speakScheduled(
                     spokenText,
                     onStarted: { [weak self] in
                         guard let self else {
                             return
                         }
+
+                        let effectName: String
+                        switch speech.kind {
+                        case .reminder:
+                            effectName = "reminder"
+                        case .announcement:
+                            effectName = "announcement"
+                        }
+                        self.soundEffects.play(effectName)
 
                         print(
                             "\n[\(speech.kind.rawValue) \(number)] "
