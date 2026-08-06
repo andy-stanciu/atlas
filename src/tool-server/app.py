@@ -118,11 +118,11 @@ def create_app():
     @app.post("/speaker/identify")
     def identify_speaker():
         try:
-            return jsonify(
-                speaker_service.identify_from_uploads(
-                    uploads=request.files.getlist("audio"),
-                )
+            result = speaker_service.identify_from_uploads(
+                uploads=request.files.getlist("audio"),
             )
+            app.logger.info("Speaker identification result: %s", result)
+            return jsonify(result)
         except SpeakerError as error:
             return jsonify(
                 ok=False,
