@@ -2,6 +2,10 @@ import AVFoundation
 import Foundation
 import QuartzCore
 
+#if canImport(Darwin)
+    import Darwin
+#endif
+
 final class VoiceAssistant {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -24,10 +28,12 @@ final class VoiceAssistant {
     )!
 
     private let kokoro: KokoroWorker
-    private let whisper = WhisperClient()
     let ollama = OllamaClient()
     let toolServer = ToolServerClient()
     private let speakerClient = SpeakerClient()
+    private var sttClient: STTClient?
+    private var recognizerFeedChain: Task<Void, Never> = Task {}
+    private var sttConnectTask: Task<Void, Never> = Task {}
 
     private var playback: AudioPlayback!
     var notificationCoordinator: NotificationCoordinator?
@@ -55,6 +61,7 @@ final class VoiceAssistant {
     private var currentPlaybackPurpose: PlaybackPurpose?
     private var pendingMergedText: String?
     private var lastThinkingFiller: String?
+    private var liveTranscriptLineCount = 1
 
     var history = [
         Message(role: "system", content: SystemPrompts.mainSystemPrompt)
@@ -78,13 +85,37 @@ final class VoiceAssistant {
                 self?.beginScheduledSpeech() ?? false
             },
         )
+
+        let lock = self.lock
+        sttConnectTask = Task { [weak self] in
+            let client = STTClient()
+            do {
+                try await client.connect()
+                await client.setPartialTextHandler { [weak self] text in
+                    self?.handleLiveTranscript(text)
+                }
+                lock.withLock {
+                    self?.sttClient = client
+                }
+                print("[stt] Connected to sttd.")
+            } catch {
+                fatalError(
+                    "Could not connect to sttd — start it with "
+                        + "'swift run sttd <model-folder>' in another terminal: "
+                        + error.localizedDescription
+                )
+            }
+        }
     }
 
     deinit {
         notificationCoordinator = nil
     }
 
-    func start() throws {
+    func start() async throws {
+        print("Connecting to speech recognition daemon...")
+        await sttConnectTask.value
+
         let input = engine.inputNode
         let output = engine.outputNode
 
@@ -368,12 +399,17 @@ final class VoiceAssistant {
                 silenceFrames = 0
                 clearPreRoll()
                 shouldCancelTimeout = conversationActive
+                beginRecognizerSession(preRoll: recording)
                 print("\nListening...", terminator: "")
                 fflush(stdout)
             }
 
         case .recording:
             recording.append(pcm)
+            let rate = Int(recordingSampleRate.rounded())
+            feedRecognizer { client in
+                try? await client.appendPCM16(pcm, sourceSampleRate: rate)
+            }
 
             if voiced {
                 silenceFrames = 0
@@ -387,6 +423,7 @@ final class VoiceAssistant {
                     completedSampleRate = recordingSampleRate
                     state = .processing
                 } else {
+                    cancelRecognizerSession()
                     state = .listening
                 }
 
@@ -421,6 +458,7 @@ final class VoiceAssistant {
                 silenceFrames = 0
                 speechFrames = 0
                 clearPreRoll()
+                beginRecognizerSession(preRoll: recording)
                 shouldStopPlayback = true
                 shouldEndConversationAfterSpeech = false
             }
@@ -462,6 +500,35 @@ final class VoiceAssistant {
         }
     }
 
+    private func feedRecognizer(
+        _ operation: @escaping @Sendable (STTClient) async -> Void
+    ) {
+        let previous = recognizerFeedChain
+        let client = sttClient
+
+        recognizerFeedChain = Task {
+            await previous.value
+            guard let client else {
+                return
+            }
+            await operation(client)
+        }
+    }
+
+    private func beginRecognizerSession(preRoll: Data) {
+        let rate = Int(recordingSampleRate.rounded())
+        feedRecognizer { client in
+            try? await client.begin()
+            try? await client.appendPCM16(preRoll, sourceSampleRate: rate)
+        }
+    }
+
+    private func cancelRecognizerSession() {
+        feedRecognizer { client in
+            try? await client.cancel()
+        }
+    }
+
     private func finishGeneration(
         for turnID: UUID
     ) {
@@ -487,12 +554,22 @@ final class VoiceAssistant {
                 try? FileManager.default.removeItem(at: wavURL)
             }
 
-            async let transcriptTask = timed("STT") {
-                try await whisper.transcribe(wavURL)
+            let client = lock.withLock { sttClient }
+            let feedChain = lock.withLock { recognizerFeedChain }
+            await feedChain.value
+
+            guard let client else {
+                print("\n[stt] Not connected to sttd, dropping turn.")
+                transitionToListening()
+                return
             }
-            let transcript = try await transcriptTask
+
+            let transcript = try await timed("STT") {
+                try await client.finish()
+            }
 
             guard !transcript.isEmpty else {
+                clearLiveTranscriptLine()
                 print("\nNo speech recognized.")
                 transitionToListening()
                 return
@@ -520,7 +597,7 @@ final class VoiceAssistant {
 
             if !active {
                 guard isWakeGreeting(transcript) else {
-                    print("\nIgnoring: \(transcript)")
+                    clearLiveTranscriptLine()
                     transitionToListening()
                     return
                 }
@@ -571,13 +648,7 @@ final class VoiceAssistant {
                 activeTurnSpeaker = speakerIdentity
             }
 
-            if speakerIdentity == nil {
-                print("\nYou: \(userText)")
-            } else {
-                print(
-                    "\n\(speakerIdentity!.displayName): \(userText)"
-                )
-            }
+            clearLiveTranscriptLine()
             print("Atlas: ", terminator: "")
             fflush(stdout)
 
@@ -757,7 +828,6 @@ final class VoiceAssistant {
             return
         }
 
-        print("\nYou: conversation closing")
         print("Atlas: \(farewell)")
         fflush(stdout)
 
@@ -891,6 +961,7 @@ final class VoiceAssistant {
             activeTurnSpeaker = nil
             clearPreRoll()
         }
+        cancelRecognizerSession()
     }
 
     private func isWakeGreeting(_ transcript: String) -> Bool {
@@ -1092,6 +1163,52 @@ final class VoiceAssistant {
             lastThinkingFiller = filler
             return filler
         }
+    }
+
+    private func handleLiveTranscript(_ text: String) {
+        guard !text.isEmpty else {
+            return
+        }
+
+        let prefixed = "You: \(text)"
+        lock.withLock {
+            eraseLiveTranscriptBlock()
+        }
+        print(prefixed, terminator: "")
+        fflush(stdout)
+        lock.withLock {
+            liveTranscriptLineCount = lineCount(for: prefixed)
+        }
+    }
+
+    private func clearLiveTranscriptLine() {
+        lock.withLock {
+            eraseLiveTranscriptBlock()
+            liveTranscriptLineCount = 1
+        }
+    }
+
+    private func eraseLiveTranscriptBlock() {
+        if liveTranscriptLineCount > 1 {
+            print("\u{1B}[\(liveTranscriptLineCount - 1)A", terminator: "")
+        }
+        print("\r\u{1B}[0J", terminator: "")
+    }
+
+    private func lineCount(for text: String) -> Int {
+        let width = terminalWidth()
+        guard width > 0 else {
+            return 1
+        }
+        return max(1, (text.count + width - 1) / width)
+    }
+
+    private func terminalWidth() -> Int {
+        var size = winsize()
+        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_col > 0 {
+            return Int(size.ws_col)
+        }
+        return 80
     }
 
     func playToolCue(

@@ -1,9 +1,8 @@
 import Foundation
 
 struct Config {
-    static let whisperURL = URL(
-        string: "http://127.0.0.1:8081/v1/audio/transcriptions"
-    )!
+    static let whisperKitModelFolder =
+        "\(NSHomeDirectory())/workplace/atlas/argmax-oss-swift/Models/whisperkit-coreml/openai_whisper-large-v3-v20240930_626MB"
 
     static let ollamaURL = URL(
         string: "http://127.0.0.1:11434/api/chat"

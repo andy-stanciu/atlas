@@ -10,8 +10,10 @@ if CommandLine.arguments.contains("--test") {
 } else {
     do {
         let assistant = try VoiceAssistant()
-        try assistant.start()
-        dispatchMain()
+        try await assistant.start()
+        while true {
+            try await Task.sleep(nanoseconds: UInt64.max)
+        }
     } catch {
         fputs(
             "Could not start Atlas: \(error.localizedDescription)\n",

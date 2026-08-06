@@ -19,6 +19,26 @@
             "target": "atlas",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release atlas (src/client)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:atlas}/src/client",
+            "name": "Debug sttd (src/client)",
+            "target": "sttd",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug sttd (src/client)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:atlas}/src/client",
+            "name": "Release sttd (src/client)",
+            "target": "sttd",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release sttd (src/client)"
         }
     ]
 }

@@ -19,3 +19,4 @@ src/tool-server/temp-audio/
 argmax-oss-swift/
 dump_directory.py
 directory_dump.txt
+*.resolved
