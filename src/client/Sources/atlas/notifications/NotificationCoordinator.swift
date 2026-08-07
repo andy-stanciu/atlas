@@ -258,4 +258,46 @@ actor NotificationCoordinator {
 
         activeReminder = reminder
     }
+
+    @discardableResult
+    func acknowledgeActiveReminder() async -> Bool {
+        guard acknowledgementEligibleReminderSnapshot() != nil else {
+            return false
+        }
+
+        do {
+            let resultBody = try await toolServer.runTool(
+                ToolCall(
+                    type: nil,
+                    function: ToolFunctionCall(
+                        index: nil,
+                        name: "acknowledge_reminder",
+                        arguments: [:]
+                    )
+                )
+            )
+
+            struct AcknowledgeResult: Decodable {
+                let ok: Bool
+            }
+
+            let result = try JSONDecoder().decode(
+                AcknowledgeResult.self,
+                from: Data(resultBody.utf8)
+            )
+
+            guard result.ok else {
+                return false
+            }
+        } catch {
+            print(
+                "[speech] reminder acknowledgement failed: "
+                    + error.localizedDescription
+            )
+            return false
+        }
+
+        markReminderAcknowledged()
+        return true
+    }
 }

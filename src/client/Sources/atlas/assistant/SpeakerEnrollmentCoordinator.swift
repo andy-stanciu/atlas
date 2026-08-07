@@ -4,7 +4,7 @@ final class SpeakerEnrollmentCoordinator {
     private let speakerClient: SpeakerClient
     private let ollama: OllamaClient
 
-    private var substantiveUnknownTurnCount = 0
+    private var anonymousProfileID: Int?
     private var latestUnknownSpeakerWAV: URL?
     private(set) var isAwaitingName = false
 
@@ -13,47 +13,6 @@ final class SpeakerEnrollmentCoordinator {
         self.ollama = ollama
     }
 
-    /// Call once per ordinary turn. Returns true if a name should now be
-    /// requested via a guaranteed follow-up utterance after this turn's
-    /// reply finishes (see `beginNameRequest`).
-    func processTurnResult(
-        speakerResponse: SpeakerIdentificationResponse?,
-        wavURL: URL
-    ) -> Bool {
-        guard !isAwaitingName else {
-            return false
-        }
-
-        if let speakerResponse, speakerResponse.status == .known {
-            resetUnknownTracking()
-            reinforceIfEligible(speakerResponse: speakerResponse, wavURL: wavURL)
-            return false
-        }
-
-        guard let speakerResponse, speakerResponse.status != .known else {
-            return false
-        }
-
-        if let durationSeconds = speakerResponse.durationSeconds,
-            durationSeconds >= Config.speakerEnrollmentMinimumClipSeconds
-        {
-            substantiveUnknownTurnCount += 1
-            replaceLatestClip(with: wavURL)
-        }
-
-        print(
-            "[speaker] substantive streak: \(substantiveUnknownTurnCount)/"
-                + "\(Config.speakerEnrollmentRequiredTurns)"
-        )
-
-        return substantiveUnknownTurnCount >= Config.speakerEnrollmentRequiredTurns
-    }
-
-    /// Call after the main reply for this turn has finished playing, only
-    /// if `processTurnResult` returned true. Generates the actual question
-    /// text and commits to `isAwaitingName` only once we have something to
-    /// say — if generation fails, returns nil and the streak is left intact
-    /// so we simply try again on a future turn.
     func beginNameRequest() async -> String? {
         do {
             let prompt = try await ollama.generateSpeakerNameRequest()
@@ -68,46 +27,136 @@ final class SpeakerEnrollmentCoordinator {
         }
     }
 
-    /// Call for the turn immediately following a name request (i.e.
-    /// when `isAwaitingName` was true), with the user's reply.
-    ///
-    /// Returns the instruction to use for this turn's
-    /// acknowledgement/decline reply. Always resets internal state,
-    /// whether or not a name was actually extracted.
     func resolveNameResponse(userText: String) async -> String {
         isAwaitingName = false
-        let enrollmentWAV = latestUnknownSpeakerWAV
-        latestUnknownSpeakerWAV = nil
-        substantiveUnknownTurnCount = 0
 
         let extractedName = try? await ollama.extractSpeakerName(from: userText)
 
-        if let extractedName, let enrollmentWAV {
+        if let extractedName, let profileID = anonymousProfileID {
             Task { [speakerClient] in
                 do {
-                    _ = try await speakerClient.enroll(
-                        name: extractedName, wavURLs: [enrollmentWAV]
+                    let result = try await speakerClient.promote(
+                        profileID: profileID, name: extractedName
                     )
-                    print("[speaker] enrolled new profile: \(extractedName)")
+                    if result.ok {
+                        print(
+                            "[speaker] promoted anonymous profile \(profileID) to: \(extractedName)"
+                        )
+                    }
                 } catch {
-                    print("[speaker] enrollment failed: \(error.localizedDescription)")
+                    print("[speaker] promotion failed: \(error.localizedDescription)")
                 }
-                try? FileManager.default.removeItem(at: enrollmentWAV)
             }
+            anonymousProfileID = nil
+            clearLatestClip()
             return SystemPrompts.speakerEnrollmentAcknowledgementInstruction
         }
 
-        if let enrollmentWAV {
-            try? FileManager.default.removeItem(at: enrollmentWAV)
-        }
         return SystemPrompts.speakerEnrollmentDeclineInstruction
     }
 
-    private func resetUnknownTracking() {
-        substantiveUnknownTurnCount = 0
-        if let wav = latestUnknownSpeakerWAV {
-            try? FileManager.default.removeItem(at: wav)
-            latestUnknownSpeakerWAV = nil
+    private func enrollAnonymously(wavURL: URL) {
+        let enrollCopy = wavURL.deletingLastPathComponent()
+            .appendingPathComponent("enroll-anon-\(UUID().uuidString).wav")
+        try? FileManager.default.copyItem(at: wavURL, to: enrollCopy)
+
+        Task { [speakerClient] in
+            defer { try? FileManager.default.removeItem(at: enrollCopy) }
+            do {
+                let result = try await speakerClient.enrollAnonymous(
+                    wavURLs: [enrollCopy]
+                )
+                if let profile = result.profile {
+                    print(
+                        "[speaker] anonymous profile enrolled: id=\(profile.id) "
+                            + "samples=\(profile.sampleCount)"
+                    )
+                }
+            } catch {
+                print("[speaker] anonymous enrollment failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func processTurnResult(
+        speakerResponse: SpeakerIdentificationResponse?,
+        wavURL: URL
+    ) async -> Bool {
+        guard !isAwaitingName else {
+            return false
+        }
+
+        guard let speakerResponse else {
+            return false
+        }
+
+        switch speakerResponse.status {
+        case .known:
+            if let identity = speakerResponse.identity, identity.anonymous {
+                anonymousProfileID = identity.id
+                return await reinforceIfEligible(
+                    speakerResponse: speakerResponse,
+                    wavURL: wavURL
+                )
+            }
+
+            anonymousProfileID = nil
+            clearLatestClip()
+            return await reinforceIfEligible(
+                speakerResponse: speakerResponse,
+                wavURL: wavURL
+            )
+
+        case .uncertain, .unknown:
+            guard let durationSeconds = speakerResponse.durationSeconds,
+                durationSeconds >= Config.speakerEnrollmentMinimumClipSeconds
+            else {
+                return false
+            }
+
+            replaceLatestClip(with: wavURL)
+
+            if anonymousProfileID == nil {
+                enrollAnonymously(wavURL: wavURL)
+            }
+
+            return false
+        }
+    }
+
+    private func reinforceIfEligible(
+        speakerResponse: SpeakerIdentificationResponse,
+        wavURL: URL
+    ) async -> Bool {
+        guard let similarity = speakerResponse.similarity,
+            let profileID = speakerResponse.profileID,
+            let durationSeconds = speakerResponse.durationSeconds,
+            similarity >= Config.speakerReinforceThreshold,
+            durationSeconds >= Config.speakerReinforceMinimumDurationSeconds
+        else {
+            return false
+        }
+
+        let reinforceCopy = wavURL.deletingLastPathComponent()
+            .appendingPathComponent("reinforce-\(UUID().uuidString).wav")
+        try? FileManager.default.copyItem(at: wavURL, to: reinforceCopy)
+
+        defer { try? FileManager.default.removeItem(at: reinforceCopy) }
+
+        do {
+            let result = try await speakerClient.reinforce(
+                profileID: profileID, wavURL: reinforceCopy
+            )
+            if result.accepted {
+                print(
+                    "[speaker] reinforced profile \(profileID) "
+                        + "(similarity=\(similarity), duration=\(durationSeconds)s)"
+                )
+            }
+            return result.askIdentification == true
+        } catch {
+            print("[speaker] reinforcement failed: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -122,38 +171,10 @@ final class SpeakerEnrollmentCoordinator {
         latestUnknownSpeakerWAV = persistedCopy
     }
 
-    private func reinforceIfEligible(
-        speakerResponse: SpeakerIdentificationResponse,
-        wavURL: URL
-    ) {
-        guard let similarity = speakerResponse.similarity,
-            let profileID = speakerResponse.profileID,
-            let durationSeconds = speakerResponse.durationSeconds,
-            similarity >= Config.speakerReinforceThreshold,
-            durationSeconds >= Config.speakerReinforceMinimumDurationSeconds
-        else {
-            return
-        }
-
-        let reinforceCopy = wavURL.deletingLastPathComponent()
-            .appendingPathComponent("reinforce-\(UUID().uuidString).wav")
-        try? FileManager.default.copyItem(at: wavURL, to: reinforceCopy)
-
-        Task { [speakerClient] in
-            defer { try? FileManager.default.removeItem(at: reinforceCopy) }
-            do {
-                let result = try await speakerClient.reinforce(
-                    profileID: profileID, wavURL: reinforceCopy
-                )
-                if result.accepted {
-                    print(
-                        "[speaker] reinforced profile \(profileID) "
-                            + "(similarity=\(similarity), duration=\(durationSeconds)s)"
-                    )
-                }
-            } catch {
-                print("[speaker] reinforcement failed: \(error.localizedDescription)")
-            }
+    private func clearLatestClip() {
+        if let wav = latestUnknownSpeakerWAV {
+            try? FileManager.default.removeItem(at: wav)
+            latestUnknownSpeakerWAV = nil
         }
     }
 }

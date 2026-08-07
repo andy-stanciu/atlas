@@ -76,44 +76,23 @@ def create_app():
     @app.post("/speaker/enroll")
     def enroll_speaker():
         try:
+            anonymous = request.form.get("anonymous", "").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
             return jsonify(
                 speaker_service.enroll_from_uploads(
                     display_name=request.form.get("name", ""),
                     uploads=request.files.getlist("audio"),
+                    anonymous=anonymous,
                 )
             )
         except SpeakerError as error:
-            return jsonify(
-                ok=False,
-                error=str(error),
-            ), error.status_code
+            return jsonify(ok=False, error=str(error)), error.status_code
         except Exception:
             app.logger.exception("Speaker enrollment failed.")
-            return jsonify(
-                ok=False,
-                error="Speaker enrollment failed.",
-            ), 500
-
-    @app.post("/speaker/<int:profile_id>/samples")
-    def add_speaker_sample(profile_id):
-        try:
-            return jsonify(
-                speaker_service.add_sample_from_uploads(
-                    profile_id=profile_id,
-                    uploads=request.files.getlist("audio"),
-                )
-            )
-        except SpeakerError as error:
-            return jsonify(
-                ok=False,
-                error=str(error),
-            ), error.status_code
-        except Exception:
-            app.logger.exception("Speaker sample addition failed.")
-            return jsonify(
-                ok=False,
-                error="Speaker sample addition failed.",
-            ), 500
+            return jsonify(ok=False, error="Speaker enrollment failed."), 500
 
     @app.post("/speaker/<int:profile_id>/reinforce")
     def reinforce_speaker(profile_id):
@@ -149,6 +128,21 @@ def create_app():
                 ok=False,
                 error="Speaker identification failed.",
             ), 500
+
+    @app.post("/speaker/<int:profile_id>/promote")
+    def promote_speaker(profile_id):
+        try:
+            result = speaker_service.promote(
+                profile_id=profile_id,
+                name=request.form.get("name", ""),
+            )
+            app.logger.info("Speaker promotion result: %s", result)
+            return jsonify(ok=True, profile=result)
+        except SpeakerError as error:
+            return jsonify(ok=False, error=str(error)), error.status_code
+        except Exception:
+            app.logger.exception("Speaker promotion failed.")
+            return jsonify(ok=False, error="Speaker promotion failed."), 500
 
     @app.errorhandler(404)
     def not_found(_):

@@ -1,5 +1,7 @@
 import logging
 import threading
+from datetime import timedelta
+from config import SPEAKER_ANONYMOUS_GC_INTERVAL_SECONDS
 from models import ActionType, SpeechKind
 from time_utils import now_utc
 
@@ -12,6 +14,7 @@ class Scheduler:
         self.stop_event = threading.Event()
         self.thread = None
         self.logger = logging.getLogger(__name__)
+        self.last_gc_run = None
 
     def start(self):
         if self.thread is not None:
@@ -32,10 +35,29 @@ class Scheduler:
         while not self.stop_event.is_set():
             try:
                 self.run_due()
+                self.run_anonymous_speaker_gc()
             except Exception:
                 self.logger.exception("Scheduler error.")
             self.stop_event.wait(self.interval)
         self.logger.info("Scheduler stopped.")
+
+    def run_anonymous_speaker_gc(self):
+        now = now_utc()
+
+        if self.last_gc_run is not None:
+            elapsed = (now - self.last_gc_run).total_seconds()
+            if elapsed < SPEAKER_ANONYMOUS_GC_INTERVAL_SECONDS:
+                return
+
+        self.last_gc_run = now
+
+        cutoff = now - timedelta(seconds=SPEAKER_ANONYMOUS_GC_INTERVAL_SECONDS)
+        deleted = self.repository.delete_stale_anonymous_profiles(cutoff)
+
+        if deleted > 0:
+            self.logger.info(
+                "GC: deleted %d stale anonymous speaker profile(s).", deleted
+            )
 
     def run_due(self):
         now = now_utc()

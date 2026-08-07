@@ -7,8 +7,6 @@ import Foundation
 final class ConsoleTranscript {
     private var activeLineCount = 1
 
-    /// Overwrites the current live line with `prefix: text`, erasing
-    /// however many terminal rows the previous partial wrapped into.
     func showPartial(_ text: String, prefix: String = "You") {
         guard !text.isEmpty else {
             return
@@ -23,9 +21,6 @@ final class ConsoleTranscript {
         activeLineCount = lineCount(for: prefixed)
     }
 
-    /// Erases the current live line (if any) without printing a
-    /// replacement. Call this immediately before printing a final
-    /// "You:" / "Atlas:" / "Ignoring:" line.
     func clear() {
         erase()
         activeLineCount = 1

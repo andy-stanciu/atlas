@@ -175,6 +175,7 @@ struct SpeakerIdentity: Equatable, Sendable {
     let id: Int
     let displayName: String
     let similarity: Double
+    let anonymous: Bool
 }
 
 struct SpeakerIdentificationResponse: Decodable, Sendable {
@@ -184,6 +185,7 @@ struct SpeakerIdentificationResponse: Decodable, Sendable {
     let displayName: String?
     let similarity: Double?
     let durationSeconds: Double?
+    let anonymous: Bool?
     let error: String?
 
     enum CodingKeys: String, CodingKey {
@@ -193,6 +195,7 @@ struct SpeakerIdentificationResponse: Decodable, Sendable {
         case displayName = "display_name"
         case similarity
         case durationSeconds = "duration_seconds"
+        case anonymous
         case error
     }
 
@@ -209,7 +212,8 @@ struct SpeakerIdentificationResponse: Decodable, Sendable {
         return SpeakerIdentity(
             id: profileID,
             displayName: displayName,
-            similarity: similarity
+            similarity: similarity,
+            anonymous: anonymous ?? false
         )
     }
 }
@@ -219,4 +223,13 @@ struct SpeakerReinforceResponse: Decodable, Sendable {
     let accepted: Bool
     let reason: String?
     let similarity: Double?
+    let askIdentification: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case accepted
+        case reason
+        case similarity
+        case askIdentification = "ask_identification"
+    }
 }

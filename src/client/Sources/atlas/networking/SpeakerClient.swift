@@ -99,13 +99,14 @@ extension SpeakerClient {
         return try JSONDecoder().decode(SpeakerReinforceResponse.self, from: data)
     }
 
-    func enroll(name: String, wavURLs: [URL]) async throws -> SpeakerIdentificationResponse {
+    func enrollAnonymous(wavURLs: [URL]) async throws -> SpeakerEnrollResponse {
         let boundary = UUID().uuidString
         var body = Data()
 
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"name\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(name)\r\n".data(using: .utf8)!)
+        body.append(
+            "Content-Disposition: form-data; name=\"anonymous\"\r\n\r\n".data(using: .utf8)!)
+        body.append("true\r\n".data(using: .utf8)!)
 
         for (index, wavURL) in wavURLs.enumerated() {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
@@ -132,24 +133,74 @@ extension SpeakerClient {
             forHTTPHeaderField: "Content-Type"
         )
         request.httpBody = body
+
         let (data, response) = try await URLSession.shared.data(for: request)
+
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
             let bodyText = String(decoding: data, as: UTF8.self)
             throw NSError(
                 domain: "SpeakerClient",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Enrollment failed: \(bodyText)"]
+                userInfo: [NSLocalizedDescriptionKey: "Anonymous enrollment failed: \(bodyText)"]
             )
         }
-        struct EnrollResponse: Decodable {
-            let ok: Bool
-        }
-        _ = try JSONDecoder().decode(EnrollResponse.self, from: data)
 
-        return SpeakerIdentificationResponse(
-            ok: true, status: .known, profileID: nil,
-            displayName: name, similarity: nil,
-            durationSeconds: nil, error: nil
+        return try JSONDecoder().decode(SpeakerEnrollResponse.self, from: data)
+    }
+
+    func promote(profileID: Int, name: String) async throws -> SpeakerEnrollResponse {
+        let boundary = UUID().uuidString
+        var body = Data()
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"name\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(name)\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        let url = Config.toolServerURL
+            .appendingPathComponent("speaker")
+            .appendingPathComponent("\(profileID)")
+            .appendingPathComponent("promote")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Config.speakerIdentificationTimeout
+        request.setValue(
+            "multipart/form-data; boundary=\(boundary)",
+            forHTTPHeaderField: "Content-Type"
         )
+        request.httpBody = body
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            let bodyText = String(decoding: data, as: UTF8.self)
+            throw NSError(
+                domain: "SpeakerClient",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Promotion failed: \(bodyText)"]
+            )
+        }
+
+        return try JSONDecoder().decode(SpeakerEnrollResponse.self, from: data)
+    }
+}
+
+struct SpeakerEnrollResponse: Decodable, Sendable {
+    let ok: Bool
+    let profile: SpeakerProfileInfo?
+
+    struct SpeakerProfileInfo: Decodable, Sendable {
+        let id: Int
+        let displayName: String
+        let anonymous: Bool
+        let sampleCount: Int
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case displayName = "display_name"
+            case anonymous
+            case sampleCount = "sample_count"
+        }
     }
 }

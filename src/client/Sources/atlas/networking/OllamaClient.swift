@@ -102,13 +102,7 @@ final class OllamaClient: @unchecked Sendable {
                         with: String(announcementNumber)
                     )
                 : SystemPrompts.reminderAnnouncementInstruction
-
-            instruction =
-                isConversationInterruption
-                ? SystemPrompts.reminderConversationInterruptionInstruction
-                    + "\n\n"
-                    + reminderInstruction
-                : reminderInstruction
+            instruction = reminderInstruction
 
         case .announcement:
             instruction = SystemPrompts.announcementInstruction

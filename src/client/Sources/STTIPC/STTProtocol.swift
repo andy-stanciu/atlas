@@ -25,9 +25,6 @@ public enum STTIPCConfig {
     public static let socketPath = NSTemporaryDirectory() + "atlas-sttd.sock"
 }
 
-/// Blocking, length-prefixed frame I/O over a raw POSIX socket file
-/// descriptor. Intentionally synchronous — callers run it from a
-/// dedicated thread (server) or a dedicated read-loop thread (client).
 public final class STTFrameConnection {
     private let fd: Int32
 

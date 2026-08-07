@@ -265,6 +265,7 @@ class Repository:
         normalized_name,
         samples,
         max_samples,
+        anonymous=False,
     ):
         now = to_storage(now_utc())
 
@@ -284,6 +285,7 @@ class Repository:
             profile = SpeakerProfileRow(
                 display_name=display_name,
                 normalized_name=normalized_name,
+                anonymous=anonymous,
                 created_at_utc=now,
                 updated_at_utc=now,
             )
@@ -304,57 +306,59 @@ class Repository:
             return {
                 "id": profile.id,
                 "display_name": profile.display_name,
+                "anonymous": profile.anonymous,
                 "sample_count": len(profile.samples),
             }
 
-    def add_speaker_sample(
-        self,
-        profile_id,
-        embedding,
-        duration_seconds,
-        max_samples,
-    ):
+    def promote_speaker_profile(self, profile_id, display_name, normalized_name):
         now = to_storage(now_utc())
 
         with Session.begin() as session:
             profile = session.get(SpeakerProfileRow, profile_id)
 
-            if profile is None:
+            if profile is None or not profile.anonymous:
                 return None
 
-            rows = session.scalars(
-                select(SpeakerSampleRow)
-                .where(SpeakerSampleRow.speaker_id == profile_id)
-                .order_by(SpeakerSampleRow.created_at_utc, SpeakerSampleRow.id)
-            ).all()
-
-            if len(rows) >= max_samples:
-                for row in rows[: len(rows) - max_samples + 1]:
-                    session.delete(row)
-
-            session.add(
-                SpeakerSampleRow(
-                    speaker_id=profile_id,
-                    embedding_json=json.dumps(embedding),
-                    duration_seconds=duration_seconds,
-                    created_at_utc=now,
-                )
+            name_taken = (
+                session.scalars(
+                    select(SpeakerProfileRow.id)
+                    .where(SpeakerProfileRow.normalized_name == normalized_name)
+                    .limit(1)
+                ).first()
+                is not None
             )
 
+            if name_taken:
+                return None
+
+            profile.display_name = display_name
+            profile.normalized_name = normalized_name
+            profile.anonymous = False
             profile.updated_at_utc = now
             session.flush()
-
-            sample_count = session.scalar(
-                select(func.count(SpeakerSampleRow.id)).where(
-                    SpeakerSampleRow.speaker_id == profile_id
-                )
-            )
 
             return {
                 "id": profile.id,
                 "display_name": profile.display_name,
-                "sample_count": sample_count,
+                "anonymous": profile.anonymous,
+                "sample_count": len(profile.samples),
             }
+
+    def delete_stale_anonymous_profiles(self, older_than_utc):
+        with Session.begin() as session:
+            stale = session.scalars(
+                select(SpeakerProfileRow).where(
+                    SpeakerProfileRow.anonymous,
+                    SpeakerProfileRow.updated_at_utc < to_storage(older_than_utc),
+                )
+            ).all()
+
+            count = len(stale)
+
+            for profile in stale:
+                session.delete(profile)
+
+            return count
 
     def list_speaker_profiles(self):
         with Session() as session:
@@ -366,6 +370,7 @@ class Repository:
                 {
                     "id": profile.id,
                     "display_name": profile.display_name,
+                    "anonymous": profile.anonymous,
                     "created_at_utc": profile.created_at_utc,
                     "updated_at_utc": profile.updated_at_utc,
                     "sample_count": len(profile.samples),
@@ -381,6 +386,7 @@ class Repository:
                 {
                     "id": profile.id,
                     "display_name": profile.display_name,
+                    "anonymous": profile.anonymous,
                     "samples": [
                         {
                             "embedding": json.loads(sample.embedding_json),
@@ -454,5 +460,6 @@ class Repository:
             return {
                 "id": profile.id,
                 "display_name": profile.display_name,
+                "anonymous": bool(profile.anonymous),
                 "sample_count": sample_count,
             }

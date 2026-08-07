@@ -1,20 +1,30 @@
 import Foundation
 
 enum ConversationClosing {
-    static func shouldClose(
+    enum Result: Equatable {
+        /// No closing intent — proceed normally.
+        case none
+        /// Utterance is purely closing — farewell immediately,
+        /// no reply generation.
+        case closeNow
+        /// Closing phrases trailed a request — answer the request,
+        /// then deliver the farewell after the reply finishes.
+        case closeAfterResponse
+    }
+
+    static func evaluate(
         userText: String,
         normalizedText: (String) -> String
-    ) -> Bool {
+    ) -> Result {
         var text = normalizedText(userText)
-
         guard !text.isEmpty else {
-            return false
+            return .none
         }
-
-        if text.hasSuffix(" atlas") {
-            text = String(text.dropLast(" atlas".count))
-                .trimmingCharacters(in: .whitespaces)
+        guard text.hasSuffix(" atlas") else {
+            return .none
         }
+        text = String(text.dropLast(" atlas".count))
+            .trimmingCharacters(in: .whitespaces)
 
         let phrases = [
             "talk to you later",
@@ -47,21 +57,27 @@ enum ConversationClosing {
             "were done",
             "thanks",
             "bye",
+            "shut up",
+            "stop talking",
+            "be quiet",
+            "please stop",
+            "stop it",
+            "shut up now",
+            "stop talking now",
+            "be quiet now",
+            "please stop now",
+            "stop it now",
         ]
 
         var remaining = text
-        var matchedClosing = false
-
         while let phrase = phrases.first(
             where: {
                 remaining == $0
                     || remaining.hasSuffix(" " + $0)
             }
         ) {
-            matchedClosing = true
-
             if remaining == phrase {
-                return true
+                return .closeNow
             }
 
             remaining = String(
@@ -70,6 +86,6 @@ enum ConversationClosing {
             .trimmingCharacters(in: .whitespaces)
         }
 
-        return matchedClosing
+        return .closeAfterResponse
     }
 }

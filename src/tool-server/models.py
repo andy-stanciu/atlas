@@ -114,6 +114,7 @@ class SpeakerProfileRow(Base):
     )
     display_name: Mapped[str] = mapped_column(String, nullable=False)
     normalized_name: Mapped[str] = mapped_column(String, nullable=False)
+    anonymous: Mapped[bool] = mapped_column(Integer, nullable=False, default=0)
     created_at_utc: Mapped[str] = mapped_column(String, nullable=False)
     updated_at_utc: Mapped[str] = mapped_column(String, nullable=False)
 

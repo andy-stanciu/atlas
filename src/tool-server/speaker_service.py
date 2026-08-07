@@ -7,10 +7,12 @@ from typing import Iterable
 import torch
 import torch.nn.functional as F
 import torchaudio
+import uuid
 from speechbrain.inference.speaker import EncoderClassifier
 from werkzeug.datastructures import FileStorage
 
 from config import (
+    SPEAKER_ANONYMOUS_ASK_CADENCE,
     SPEAKER_KNOWN_THRESHOLD,
     SPEAKER_MAX_SAMPLES,
     SPEAKER_IDENTIFY_MIN_SECONDS,
@@ -57,6 +59,7 @@ class SpeakerMatch:
     display_name: str | None
     similarity: float | None
     duration_seconds: float
+    anonymous: bool = False
 
 
 class SpeakerService:
@@ -86,6 +89,7 @@ class SpeakerService:
         self,
         display_name: str,
         uploads: Iterable[FileStorage],
+        anonymous: bool = False,
     ) -> dict:
         audio_paths = self._save_uploads(uploads)
 
@@ -95,7 +99,7 @@ class SpeakerService:
                     "Provide at least one WAV file in multipart field 'audio'."
                 )
 
-            profile = self.enroll(display_name, audio_paths)
+            profile = self.enroll(display_name, audio_paths, anonymous=anonymous)
 
             return {
                 "ok": True,
@@ -111,28 +115,6 @@ class SpeakerService:
             raise SpeakerError("The speaker name must contain letters or numbers.")
 
         return normalized
-
-    def add_sample_from_uploads(
-        self,
-        profile_id: int,
-        uploads: Iterable[FileStorage],
-    ) -> dict:
-        audio_paths = self._save_uploads(uploads)
-
-        try:
-            if len(audio_paths) != 1:
-                raise SpeakerError(
-                    "Provide exactly one WAV file in multipart field 'audio'."
-                )
-
-            profile = self.add_sample(profile_id, audio_paths[0])
-
-            return {
-                "ok": True,
-                "profile": profile,
-            }
-        finally:
-            self._delete_temporary_files(audio_paths)
 
     def identify_from_uploads(
         self,
@@ -154,6 +136,7 @@ class SpeakerService:
                 "profile_id": match.profile_id,
                 "display_name": match.display_name,
                 "similarity": match.similarity,
+                "anonymous": bool(match.anonymous),
                 "duration_seconds": round(match.duration_seconds, 3),
             }
         finally:
@@ -175,12 +158,8 @@ class SpeakerService:
         self,
         display_name: str,
         audio_paths: list[Path],
+        anonymous: bool = False,
     ) -> dict:
-        display_name = display_name.strip()
-
-        if not display_name:
-            raise SpeakerError("Provide a non-empty speaker name.")
-
         if not audio_paths:
             raise SpeakerError("Provide at least one audio file.")
 
@@ -194,9 +173,18 @@ class SpeakerService:
                     f"(got {sample.duration_seconds:.2f}s)."
                 )
 
+        if anonymous:
+            display_name = "Anonymous User"
+            normalized_name = f"anonymous-user-{uuid.uuid4().hex[:12]}"
+        else:
+            display_name = display_name.strip()
+            if not display_name:
+                raise SpeakerError("Provide a non-empty speaker name.")
+            normalized_name = self.normalized_speaker_name(display_name)
+
         profile = self.repository.create_speaker_profile(
             display_name=display_name,
-            normalized_name=self.normalized_speaker_name(display_name),
+            normalized_name=normalized_name,
             samples=[
                 {
                     "embedding": sample.embedding,
@@ -205,31 +193,13 @@ class SpeakerService:
                 for sample in embedded
             ],
             max_samples=SPEAKER_MAX_SAMPLES,
+            anonymous=anonymous,
         )
 
         if profile is None:
             raise SpeakerAlreadyEnrolledError(
                 f"'{display_name}' is already enrolled as a speaker."
             )
-
-        return profile
-
-    def add_sample(
-        self,
-        profile_id: int,
-        audio_path: Path,
-    ) -> dict:
-        sample = self.embed_file(audio_path)
-
-        profile = self.repository.add_speaker_sample(
-            profile_id=profile_id,
-            embedding=sample.embedding,
-            duration_seconds=sample.duration_seconds,
-            max_samples=SPEAKER_MAX_SAMPLES,
-        )
-
-        if profile is None:
-            raise SpeakerNotFoundError(f"Speaker profile '{profile_id}' was not found.")
 
         return profile
 
@@ -277,6 +247,7 @@ class SpeakerService:
                 display_name=None,
                 similarity=similarity,
                 duration_seconds=sample.duration_seconds,
+                anonymous=False,
             )
 
         if best_similarity < SPEAKER_KNOWN_THRESHOLD:
@@ -286,6 +257,7 @@ class SpeakerService:
                 display_name=best_profile["display_name"],
                 similarity=similarity,
                 duration_seconds=sample.duration_seconds,
+                anonymous=bool(best_profile.get("anonymous", False)),
             )
 
         return SpeakerMatch(
@@ -294,6 +266,7 @@ class SpeakerService:
             display_name=best_profile["display_name"],
             similarity=similarity,
             duration_seconds=sample.duration_seconds,
+            anonymous=bool(best_profile.get("anonymous", False)),
         )
 
     def embed_file(
@@ -395,6 +368,7 @@ class SpeakerService:
                 "accepted": False,
                 "reason": "clip_too_short",
                 "duration_seconds": round(sample.duration_seconds, 3),
+                "ask_identification": False,
             }
 
         new_embedding = F.normalize(
@@ -421,6 +395,7 @@ class SpeakerService:
                     "accepted": False,
                     "reason": "similarity_below_reinforce_threshold",
                     "similarity": round(best_existing_similarity, 4),
+                    "ask_identification": False,
                 }
 
             if best_existing_similarity >= SPEAKER_REDUNDANCY_THRESHOLD:
@@ -429,6 +404,7 @@ class SpeakerService:
                     "accepted": False,
                     "reason": "redundant_sample",
                     "similarity": round(best_existing_similarity, 4),
+                    "ask_identification": False,
                 }
 
         remove_sample_ids: list[int] = []
@@ -466,6 +442,12 @@ class SpeakerService:
             new_duration_seconds=sample.duration_seconds,
         )
 
+        ask_identification = bool(
+            profile is not None
+            and profile.get("anonymous", False)
+            and profile["sample_count"] % SPEAKER_ANONYMOUS_ASK_CADENCE == 0
+        )
+
         return {
             "ok": True,
             "accepted": True,
@@ -474,5 +456,26 @@ class SpeakerService:
                 if best_existing_similarity is not None
                 else None
             ),
+            "anonymous": bool(profile.get("anonymous", False)) if profile else None,
+            "ask_identification": ask_identification,
             "profile": profile,
         }
+
+    def promote(self, profile_id: int, name: str) -> dict:
+        name = name.strip()
+
+        if not name:
+            raise SpeakerError("Provide a non-empty speaker name.")
+
+        profile = self.repository.promote_speaker_profile(
+            profile_id=profile_id,
+            display_name=name,
+            normalized_name=self.normalized_speaker_name(name),
+        )
+
+        if profile is None:
+            raise SpeakerNotFoundError(
+                f"Anonymous speaker profile '{profile_id}' was not found or name is taken."
+            )
+
+        return profile

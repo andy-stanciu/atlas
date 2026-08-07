@@ -1,5 +1,5 @@
 import Foundation
-import STTIPC
+@preconcurrency import STTIPC
 
 enum STTClientError: LocalizedError {
     case notConnected
