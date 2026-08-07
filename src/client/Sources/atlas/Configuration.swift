@@ -39,6 +39,12 @@ struct Config {
     static let preRollMilliseconds = 500
 
     static let conversationTimeoutSeconds: TimeInterval = 10
+    static let interruptGracePeriodSeconds: CFTimeInterval = 3.0
+
+    static let speakerReinforceThreshold = 0.70
+    static let speakerReinforceMinimumDurationSeconds = 5.0
+    static let speakerEnrollmentMinimumClipSeconds = 5.0
+    static let speakerEnrollmentRequiredTurns = 3
 
     static let wakeGreetings = [
         "hey",

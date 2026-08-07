@@ -115,6 +115,21 @@ def create_app():
                 error="Speaker sample addition failed.",
             ), 500
 
+    @app.post("/speaker/<int:profile_id>/reinforce")
+    def reinforce_speaker(profile_id):
+        try:
+            result = speaker_service.reinforce_from_uploads(
+                profile_id=profile_id,
+                uploads=request.files.getlist("audio"),
+            )
+            app.logger.info("Speaker reinforcement result: %s", result)
+            return jsonify(result)
+        except SpeakerError as error:
+            return jsonify(ok=False, error=str(error)), error.status_code
+        except Exception:
+            app.logger.exception("Speaker reinforcement failed.")
+            return jsonify(ok=False, error="Speaker reinforcement failed."), 500
+
     @app.post("/speaker/identify")
     def identify_speaker():
         try:

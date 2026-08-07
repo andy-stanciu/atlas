@@ -213,3 +213,10 @@ struct SpeakerIdentificationResponse: Decodable, Sendable {
         )
     }
 }
+
+struct SpeakerReinforceResponse: Decodable, Sendable {
+    let ok: Bool
+    let accepted: Bool
+    let reason: String?
+    let similarity: Double?
+}

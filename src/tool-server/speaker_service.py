@@ -13,9 +13,13 @@ from werkzeug.datastructures import FileStorage
 from config import (
     SPEAKER_KNOWN_THRESHOLD,
     SPEAKER_MAX_SAMPLES,
-    SPEAKER_MIN_AUDIO_SECONDS,
+    SPEAKER_IDENTIFY_MIN_SECONDS,
+    SPEAKER_ENROLLMENT_MIN_SECONDS,
+    SPEAKER_REINFORCE_MIN_SECONDS,
     SPEAKER_MODEL_DIR,
     SPEAKER_MODEL_NAME,
+    SPEAKER_REDUNDANCY_THRESHOLD,
+    SPEAKER_REINFORCE_THRESHOLD,
     SPEAKER_REVIEW_THRESHOLD,
 )
 from repository import Repository
@@ -182,6 +186,14 @@ class SpeakerService:
 
         embedded = [self.embed_file(path) for path in audio_paths]
 
+        for sample in embedded:
+            if sample.duration_seconds < SPEAKER_ENROLLMENT_MIN_SECONDS:
+                raise SpeakerAudioError(
+                    "Each enrollment clip must be at least "
+                    f"{SPEAKER_ENROLLMENT_MIN_SECONDS:g} seconds "
+                    f"(got {sample.duration_seconds:.2f}s)."
+                )
+
         profile = self.repository.create_speaker_profile(
             display_name=display_name,
             normalized_name=self.normalized_speaker_name(display_name),
@@ -305,10 +317,10 @@ class SpeakerService:
 
         duration_seconds = waveform.shape[1] / TARGET_SAMPLE_RATE
 
-        if duration_seconds < SPEAKER_MIN_AUDIO_SECONDS:
+        if duration_seconds < SPEAKER_IDENTIFY_MIN_SECONDS:
             raise SpeakerAudioError(
                 "Each audio clip must be at least "
-                f"{SPEAKER_MIN_AUDIO_SECONDS:g} seconds."
+                f"{SPEAKER_IDENTIFY_MIN_SECONDS:g} seconds."
             )
 
         waveform = waveform.to(dtype=torch.float32)
@@ -352,3 +364,115 @@ class SpeakerService:
     ) -> None:
         for path in paths:
             path.unlink(missing_ok=True)
+
+    def reinforce_from_uploads(
+        self,
+        profile_id: int,
+        uploads: Iterable[FileStorage],
+    ) -> dict:
+        audio_paths = self._save_uploads(uploads)
+
+        try:
+            if len(audio_paths) != 1:
+                raise SpeakerError(
+                    "Provide exactly one WAV file in multipart field 'audio'."
+                )
+
+            return self.reinforce(profile_id, audio_paths[0])
+        finally:
+            self._delete_temporary_files(audio_paths)
+
+    def reinforce(
+        self,
+        profile_id: int,
+        audio_path: Path,
+    ) -> dict:
+        sample = self.embed_file(audio_path)
+
+        if sample.duration_seconds < SPEAKER_REINFORCE_MIN_SECONDS:
+            return {
+                "ok": True,
+                "accepted": False,
+                "reason": "clip_too_short",
+                "duration_seconds": round(sample.duration_seconds, 3),
+            }
+
+        new_embedding = F.normalize(
+            torch.tensor(sample.embedding, dtype=torch.float32), p=2, dim=0
+        )
+        stored_samples = self.repository.get_speaker_samples(profile_id)
+        if stored_samples is None:
+            raise SpeakerNotFoundError(f"Speaker profile '{profile_id}' was not found.")
+        stored_embeddings = [
+            F.normalize(torch.tensor(s["embedding"], dtype=torch.float32), p=2, dim=0)
+            for s in stored_samples
+        ]
+        best_existing_similarity = None
+        if stored_embeddings:
+            similarities = [
+                F.cosine_similarity(new_embedding.unsqueeze(0), ref.unsqueeze(0)).item()
+                for ref in stored_embeddings
+            ]
+            best_existing_similarity = max(similarities)
+
+            if best_existing_similarity < SPEAKER_REINFORCE_THRESHOLD:
+                return {
+                    "ok": True,
+                    "accepted": False,
+                    "reason": "similarity_below_reinforce_threshold",
+                    "similarity": round(best_existing_similarity, 4),
+                }
+
+            if best_existing_similarity >= SPEAKER_REDUNDANCY_THRESHOLD:
+                return {
+                    "ok": True,
+                    "accepted": False,
+                    "reason": "redundant_sample",
+                    "similarity": round(best_existing_similarity, 4),
+                }
+
+        remove_sample_ids: list[int] = []
+
+        if len(stored_samples) >= SPEAKER_MAX_SAMPLES:
+            best_pair_similarity = float("-inf")
+            victim_id = None
+
+            for i in range(len(stored_embeddings)):
+                for j in range(i + 1, len(stored_embeddings)):
+                    similarity = F.cosine_similarity(
+                        stored_embeddings[i].unsqueeze(0),
+                        stored_embeddings[j].unsqueeze(0),
+                    ).item()
+                    if similarity > best_pair_similarity:
+                        best_pair_similarity = similarity
+                        victim_id = stored_samples[i]["id"]
+
+            for idx, ref in enumerate(stored_embeddings):
+                similarity = F.cosine_similarity(
+                    new_embedding.unsqueeze(0), ref.unsqueeze(0)
+                ).item()
+                if similarity > best_pair_similarity:
+                    best_pair_similarity = similarity
+                    victim_id = stored_samples[idx]["id"]
+
+            remove_sample_ids = (
+                [victim_id] if victim_id is not None else [stored_samples[0]["id"]]
+            )
+
+        profile = self.repository.replace_speaker_samples(
+            profile_id=profile_id,
+            remove_sample_ids=remove_sample_ids,
+            new_embedding=sample.embedding,
+            new_duration_seconds=sample.duration_seconds,
+        )
+
+        return {
+            "ok": True,
+            "accepted": True,
+            "similarity": (
+                round(best_existing_similarity, 4)
+                if best_existing_similarity is not None
+                else None
+            ),
+            "profile": profile,
+        }

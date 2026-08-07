@@ -2,10 +2,6 @@ import AVFoundation
 import Foundation
 import QuartzCore
 
-#if canImport(Darwin)
-    import Darwin
-#endif
-
 final class VoiceAssistant {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -31,6 +27,8 @@ final class VoiceAssistant {
     let ollama = OllamaClient()
     let toolServer = ToolServerClient()
     private let speakerClient = SpeakerClient()
+    private let speakerEnrollment: SpeakerEnrollmentCoordinator
+    private let consoleTranscript = ConsoleTranscript()
     private var sttClient: STTClient?
     private var recognizerFeedChain: Task<Void, Never> = Task {}
     private var sttConnectTask: Task<Void, Never> = Task {}
@@ -49,6 +47,7 @@ final class VoiceAssistant {
     private var speechFrames = 0
     private var silenceFrames = 0
     private var queuedAudioBuffers = 0
+    private var speakingStartedAt: CFTimeInterval = 0
 
     private var conversationActive = false
     private var conversationTimeoutWorkItem: DispatchWorkItem?
@@ -61,7 +60,6 @@ final class VoiceAssistant {
     private var currentPlaybackPurpose: PlaybackPurpose?
     private var pendingMergedText: String?
     private var lastThinkingFiller: String?
-    private var liveTranscriptLineCount = 1
 
     var history = [
         Message(role: "system", content: SystemPrompts.mainSystemPrompt)
@@ -69,6 +67,10 @@ final class VoiceAssistant {
 
     init() throws {
         kokoro = try KokoroWorker()
+        speakerEnrollment = SpeakerEnrollmentCoordinator(
+            speakerClient: speakerClient,
+            ollama: ollama
+        )
 
         playback = AudioPlayback(
             player: player,
@@ -260,7 +262,10 @@ final class VoiceAssistant {
             case .recording:
                 return false
 
-            case .listening, .processing, .speaking:
+            case .listening, .processing:
+                speakingStartedAt = CACurrentMediaTime()
+
+            case .speaking:
                 break
             }
 
@@ -297,6 +302,7 @@ final class VoiceAssistant {
             speechFrames = 0
             silenceFrames = 0
             queuedAudioBuffers = 1
+            speakingStartedAt = CACurrentMediaTime()
 
             shouldCancelTimeout = conversationActive
             return true
@@ -325,7 +331,11 @@ final class VoiceAssistant {
             currentPlaybackPurpose = nil
 
             if purpose == .thinkingFiller {
-                state = .listening
+                // Not .listening — the real reply hasn't started yet
+                // (generation may still be running). Staying in
+                // .processing keeps scheduled speech (reminders,
+                // announcements) from sneaking in during this gap.
+                state = .processing
                 speechFrames = 0
                 silenceFrames = 0
                 return
@@ -435,8 +445,11 @@ final class VoiceAssistant {
         case .speaking:
             appendToPreRoll(pcm)
             speechFrames = voiced ? speechFrames + 1 : 0
+            let elapsedSinceSpeaking = CACurrentMediaTime() - speakingStartedAt
 
-            if speechFrames >= Config.interruptSpeechFrames {
+            if speechFrames >= Config.interruptSpeechFrames,
+                elapsedSinceSpeaking >= Config.interruptGracePeriodSeconds
+            {
                 let mergeIntoPendingTurn =
                     currentPlaybackPurpose == .thinkingFiller
 
@@ -568,7 +581,7 @@ final class VoiceAssistant {
             }
 
             guard !transcript.isEmpty else {
-                clearLiveTranscriptLine()
+                consoleTranscript.clear()
                 print("\nNo speech recognized.")
                 transitionToListening()
                 return
@@ -596,7 +609,7 @@ final class VoiceAssistant {
 
             if !active {
                 guard isWakeGreeting(transcript) else {
-                    clearLiveTranscriptLine()
+                    consoleTranscript.clear()
                     transitionToListening()
                     return
                 }
@@ -612,20 +625,54 @@ final class VoiceAssistant {
                 cancelConversationTimeout()
             }
 
-            let speakerResponseTask = Task { [speakerClient] in
-                try await timed("Speaker ID") {
+            let speakerResponse: SpeakerIdentificationResponse?
+            do {
+                speakerResponse = try await timed("Speaker ID") {
                     try await speakerClient.identify(wavURL)
                 }
+            } catch {
+                print("[speaker] identify request failed: \(error.localizedDescription)")
+                speakerResponse = nil
             }
-            let speakerIdentity = try? await speakerResponseTask.value.identity
+
+            let speakerIdentity = speakerResponse?.identity
+
             if let speakerIdentity {
                 print(
                     "[speaker] known: \(speakerIdentity.displayName) "
-                        + "(similarity=\(String(format: "%.3f", speakerIdentity.similarity))))"
+                        + "(similarity=\(String(format: "%.3f", speakerIdentity.similarity)))"
+                )
+            } else if let speakerResponse {
+                print(
+                    "[speaker] status=\(speakerResponse.status.rawValue) "
+                        + "similarity="
+                        + "\(speakerResponse.similarity.map { String(format: "%.3f", $0) } ?? "n/a") "
+                        + "duration="
+                        + "\(speakerResponse.durationSeconds.map { String(format: "%.2f", $0) } ?? "n/a")s"
                 )
             } else {
-                print("[speaker] unknown or unavailable")
+                print("[speaker] identify unavailable this turn")
             }
+
+            if speakerEnrollment.isAwaitingName {
+                let instruction = await speakerEnrollment.resolveNameResponse(
+                    userText: userText
+                )
+
+                beginGenerationTurn(
+                    userText: userText,
+                    speakerIdentity: speakerIdentity,
+                    speakerInstruction: instruction,
+                    playThinkingFiller: false
+                )
+
+                return
+            }
+
+            let shouldRequestName = speakerEnrollment.processTurnResult(
+                speakerResponse: speakerResponse,
+                wavURL: wavURL
+            )
 
             let activeReminder = await notificationCoordinator?
                 .acknowledgementEligibleReminderSnapshot()
@@ -640,131 +687,21 @@ final class VoiceAssistant {
                 return
             }
 
-            let turnID = UUID()
-            lock.withLock {
-                activeTurnID = turnID
-                activeTurnText = userText
-                activeTurnSpeaker = speakerIdentity
-            }
-
-            clearLiveTranscriptLine()
-            print("Atlas: ", terminator: "")
-            fflush(stdout)
-
-            if !wakeOnly {
-                let filler = nextThinkingFiller()
-
-                Task { [weak self] in
-                    guard let self else {
-                        return
-                    }
-
-                    try? await self.playback.queueThinkingFiller(
-                        filler,
-                        for: turnID,
-                        isCurrentTurn: { [weak self] id in
-                            self?.isCurrentTurn(id) ?? false
-                        }
-                    )
+            var onCompletion: (@Sendable () async -> Void)?
+            if shouldRequestName {
+                onCompletion = { [weak self] in
+                    await self?.speakNameRequestFollowUp()
                 }
             }
-
-            let task = Task { [weak self] in
-                guard let self else {
-                    return
-                }
-                defer {
-                    self.finishGeneration(for: turnID)
-                }
-
-                let startedAt = CACurrentMediaTime()
-                var printedAnyText = false
-
-                do {
-                    let fullReply = try await self.streamOllama(
-                        userText,
-                        turnID: turnID,
-                        speakerInstruction: speakerIdentity.map {
-                            self.speakerContextInstruction(for: $0)
-                        } ?? nil
-                    ) { [weak self] sentence in
-                        guard let self else {
-                            return
-                        }
-
-                        try Task.checkCancellation()
-
-                        guard self.isCurrentTurn(turnID) else {
-                            throw CancellationError()
-                        }
-
-                        if printedAnyText {
-                            print(" ", terminator: "")
-                        }
-
-                        print(sentence, terminator: "")
-                        fflush(stdout)
-                        printedAnyText = true
-
-                        try await self.playback.queueAssistantReply(
-                            sentence,
-                            for: turnID,
-                            isCurrentTurn: { [weak self] id in
-                                self?.isCurrentTurn(id) ?? false
-                            }
-                        )
-                    }
-
-                    try Task.checkCancellation()
-
-                    guard self.isCurrentTurn(turnID) else {
-                        return
-                    }
-
-                    if !printedAnyText, !fullReply.isEmpty {
-                        print(fullReply, terminator: "")
-                        fflush(stdout)
-
-                        try await self.playback.queueAssistantReply(
-                            fullReply,
-                            for: turnID,
-                            isCurrentTurn: { [weak self] id in
-                                self?.isCurrentTurn(id) ?? false
-                            }
-                        )
-                    }
-
-                    let elapsed = CACurrentMediaTime() - startedAt
-
-                    print()
-                    print(
-                        "[timing] LLM stream complete: "
-                            + "\(String(format: "%.3f", elapsed)) s\n"
-                    )
-                } catch is CancellationError {
-                    return
-                } catch {
-                    guard self.isCurrentTurn(turnID) else {
-                        return
-                    }
-
-                    print(
-                        "\n[pipeline error] "
-                            + error.localizedDescription
-                    )
-
-                    self.transitionToListening()
-                }
-            }
-
-            lock.withLock {
-                generationTask?.cancel()
-                guard activeTurnID == turnID else {
-                    task.cancel()
-                    return
-                }
-                generationTask = task
-            }
+            beginGenerationTurn(
+                userText: userText,
+                speakerIdentity: speakerIdentity,
+                speakerInstruction: speakerIdentity.flatMap {
+                    self.speakerContextInstruction(for: $0)
+                },
+                playThinkingFiller: !wakeOnly,
+                onCompletion: onCompletion
+            )
         } catch {
             let nsError = error as NSError
 
@@ -782,6 +719,161 @@ final class VoiceAssistant {
 
             transitionToListening()
         }
+    }
+
+    /// Shared by both the normal-turn path and the enrollment
+    /// name-response path: builds a turnID, optionally plays a
+    /// thinking filler, streams the reply, and wires it into the
+    /// cancellable `generationTask` exactly like every other turn.
+    private func beginGenerationTurn(
+        userText: String,
+        speakerIdentity: SpeakerIdentity?,
+        speakerInstruction: String?,
+        playThinkingFiller: Bool,
+        onCompletion: (@Sendable () async -> Void)? = nil
+    ) {
+        let turnID = UUID()
+        lock.withLock {
+            activeTurnID = turnID
+            activeTurnText = userText
+            activeTurnSpeaker = speakerIdentity
+        }
+
+        consoleTranscript.clear()
+        print("Atlas: ", terminator: "")
+        fflush(stdout)
+
+        if playThinkingFiller {
+            let filler = nextThinkingFiller()
+
+            Task { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                try? await self.playback.queueThinkingFiller(
+                    filler,
+                    for: turnID,
+                    isCurrentTurn: { [weak self] id in
+                        self?.isCurrentTurn(id) ?? false
+                    }
+                )
+            }
+        }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishGeneration(for: turnID) }
+
+            let startedAt = CACurrentMediaTime()
+            var printedAnyText = false
+
+            do {
+                let fullReply = try await self.streamOllama(
+                    userText,
+                    turnID: turnID,
+                    speakerInstruction: speakerInstruction
+                ) { [weak self] sentence in
+                    guard let self else {
+                        return
+                    }
+
+                    try Task.checkCancellation()
+
+                    guard self.isCurrentTurn(turnID) else {
+                        throw CancellationError()
+                    }
+
+                    if printedAnyText {
+                        print(" ", terminator: "")
+                    }
+
+                    print(sentence, terminator: "")
+                    fflush(stdout)
+                    printedAnyText = true
+
+                    try await self.playback.queueAssistantReply(
+                        sentence,
+                        for: turnID,
+                        isCurrentTurn: { [weak self] id in
+                            self?.isCurrentTurn(id) ?? false
+                        }
+                    )
+                }
+
+                try Task.checkCancellation()
+
+                guard self.isCurrentTurn(turnID) else {
+                    return
+                }
+
+                if !printedAnyText, !fullReply.isEmpty {
+                    print(fullReply, terminator: "")
+                    fflush(stdout)
+
+                    try await self.playback.queueAssistantReply(
+                        fullReply,
+                        for: turnID,
+                        isCurrentTurn: { [weak self] id in
+                            self?.isCurrentTurn(id) ?? false
+                        }
+                    )
+                }
+
+                let elapsed = CACurrentMediaTime() - startedAt
+                print()
+                print("[timing] LLM stream complete: \(String(format: "%.3f", elapsed)) s\n")
+
+                if let onCompletion {
+                    await onCompletion()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.isCurrentTurn(turnID) else {
+                    return
+                }
+
+                print(
+                    "\n[pipeline error] "
+                        + error.localizedDescription
+                )
+
+                self.transitionToListening()
+            }
+        }
+
+        lock.withLock {
+            generationTask?.cancel()
+            guard activeTurnID == turnID else {
+                task.cancel()
+                return
+            }
+            generationTask = task
+        }
+    }
+
+    private func speakNameRequestFollowUp() async {
+        guard let prompt = await speakerEnrollment.beginNameRequest() else {
+            return
+        }
+
+        print("Atlas: \(prompt)")
+        fflush(stdout)
+
+        let turnID = UUID()
+        lock.withLock {
+            activeTurnID = turnID
+            activeTurnText = nil
+        }
+
+        try? await playback.queueAssistantReply(
+            prompt,
+            for: turnID,
+            isCurrentTurn: { [weak self] id in
+                self?.isCurrentTurn(id) ?? false
+            }
+        )
     }
 
     private func speakerContextInstruction(
@@ -1165,49 +1257,9 @@ final class VoiceAssistant {
     }
 
     private func handleLiveTranscript(_ text: String) {
-        guard !text.isEmpty else {
-            return
-        }
-
-        let prefixed = "You: \(text)"
         lock.withLock {
-            eraseLiveTranscriptBlock()
+            consoleTranscript.showPartial(text)
         }
-        print(prefixed, terminator: "")
-        fflush(stdout)
-        lock.withLock {
-            liveTranscriptLineCount = lineCount(for: prefixed)
-        }
-    }
-
-    private func clearLiveTranscriptLine() {
-        lock.withLock {
-            eraseLiveTranscriptBlock()
-            liveTranscriptLineCount = 1
-        }
-    }
-
-    private func eraseLiveTranscriptBlock() {
-        if liveTranscriptLineCount > 1 {
-            print("\u{1B}[\(liveTranscriptLineCount - 1)A", terminator: "")
-        }
-        print("\r\u{1B}[0J", terminator: "")
-    }
-
-    private func lineCount(for text: String) -> Int {
-        let width = terminalWidth()
-        guard width > 0 else {
-            return 1
-        }
-        return max(1, (text.count + width - 1) / width)
-    }
-
-    private func terminalWidth() -> Int {
-        var size = winsize()
-        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_col > 0 {
-            return Int(size.ws_col)
-        }
-        return 80
     }
 
     func playToolCue(

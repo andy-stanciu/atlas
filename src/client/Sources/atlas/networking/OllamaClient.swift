@@ -185,4 +185,80 @@ final class OllamaClient: @unchecked Sendable {
             in: .whitespacesAndNewlines
         )
     }
+
+    func generateSpeakerNameRequest() async throws -> String {
+        let response = try await chat(
+            messages: [
+                Message(role: "system", content: SystemPrompts.mainSystemPrompt),
+                Message(
+                    role: "system",
+                    content: SystemPrompts.speakerNameRequestInstruction
+                ),
+                Message(
+                    role: "user",
+                    content: "You don't recognize this speaker's voice."
+                ),
+            ],
+            tools: [],
+            temperature: Config.ollamaDefaultTemperature
+        )
+
+        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func extractSpeakerName(from utterance: String) async throws -> String? {
+        let response = try await chat(
+            messages: [
+                Message(
+                    role: "system",
+                    content: SystemPrompts.speakerNameExtractionInstruction
+                ),
+                Message(role: "user", content: utterance),
+            ],
+            tools: [],
+            temperature: 0
+        )
+
+        let trimmed = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard trimmed.uppercased() != "NO_NAME_PROVIDED", !trimmed.isEmpty else {
+            return nil
+        }
+
+        return trimmed
+    }
+
+    func generateEnrollmentAcknowledgement(name: String) async throws -> String {
+        let response = try await chat(
+            messages: [
+                Message(role: "system", content: SystemPrompts.mainSystemPrompt),
+                Message(
+                    role: "system",
+                    content: SystemPrompts.speakerEnrollmentAcknowledgementInstruction
+                ),
+                Message(role: "user", content: "My name is \(name)."),
+            ],
+            tools: [],
+            temperature: 0.5
+        )
+
+        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func generateEnrollmentDeclineAcknowledgement() async throws -> String {
+        let response = try await chat(
+            messages: [
+                Message(role: "system", content: SystemPrompts.mainSystemPrompt),
+                Message(
+                    role: "system",
+                    content: SystemPrompts.speakerEnrollmentDeclineInstruction
+                ),
+                Message(role: "user", content: "I'd rather not share my name."),
+            ],
+            tools: [],
+            temperature: 0.5
+        )
+
+        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }

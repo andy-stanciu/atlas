@@ -158,4 +158,31 @@ enum SystemPrompts {
         The current user's name is {SPEAKER_NAME}.
         Always use {SPEAKER_NAME} naturally in the farewell.
         """
+
+    static let speakerNameRequestInstruction = """
+        You don't recognize the current user's voice. In one short, warm \
+        sentence, ask for their name so you can remember them next time. Make \
+        it clearly optional — something like "no worries if you'd rather not" \
+        — so they don't feel pressured.
+        """
+
+    static let speakerNameExtractionInstruction = """
+        You need to extract the user's name from their reply to the question "What's \
+        your name?" If they clearly stated a name, respond with ONLY that \
+        name, properly capitalized — no punctuation, no extra words, nothing \
+        else. If they declined, deflected, joked, asked a question back, or \
+        said anything that isn't a name, respond with exactly: NO_NAME_PROVIDED
+        """
+
+    static let speakerEnrollmentAcknowledgementInstruction = """
+        The user just told you their name. Respond with one short, warm \
+        sentence acknowledging it — e.g. greeting them by name — then \
+        naturally continue the conversation.
+        """
+
+    static let speakerEnrollmentDeclineInstruction = """
+        The user chose not to share their name. Respond with one short, \
+        warm sentence letting them know that's completely fine, then continue \
+        the conversation naturally without dwelling on it.
+        """
 }

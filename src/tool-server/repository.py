@@ -1,5 +1,5 @@
 import json
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, update, delete
 from db import Base, Session, engine
 from models import (
     ReminderRow,
@@ -391,3 +391,68 @@ class Repository:
                 }
                 for profile in profiles
             ]
+
+    def get_speaker_samples(self, profile_id):
+        with Session() as session:
+            profile = session.get(SpeakerProfileRow, profile_id)
+            if profile is None:
+                return None
+            rows = session.scalars(
+                select(SpeakerSampleRow)
+                .where(SpeakerSampleRow.speaker_id == profile_id)
+                .order_by(SpeakerSampleRow.created_at_utc, SpeakerSampleRow.id)
+            ).all()
+            return [
+                {
+                    "id": row.id,
+                    "embedding": json.loads(row.embedding_json),
+                    "duration_seconds": row.duration_seconds,
+                }
+                for row in rows
+            ]
+
+    def replace_speaker_samples(
+        self,
+        profile_id,
+        remove_sample_ids,
+        new_embedding,
+        new_duration_seconds,
+    ):
+        now = to_storage(now_utc())
+
+        with Session.begin() as session:
+            profile = session.get(SpeakerProfileRow, profile_id)
+
+            if profile is None:
+                return None
+
+            if remove_sample_ids:
+                session.execute(
+                    delete(SpeakerSampleRow).where(
+                        SpeakerSampleRow.id.in_(remove_sample_ids)
+                    )
+                )
+
+            session.add(
+                SpeakerSampleRow(
+                    speaker_id=profile_id,
+                    embedding_json=json.dumps(new_embedding),
+                    duration_seconds=new_duration_seconds,
+                    created_at_utc=now,
+                )
+            )
+
+            profile.updated_at_utc = now
+            session.flush()
+
+            sample_count = session.scalar(
+                select(func.count(SpeakerSampleRow.id)).where(
+                    SpeakerSampleRow.speaker_id == profile_id
+                )
+            )
+
+            return {
+                "id": profile.id,
+                "display_name": profile.display_name,
+                "sample_count": sample_count,
+            }
