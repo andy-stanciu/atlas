@@ -2,26 +2,26 @@ import Foundation
 
 enum ConversationClosing {
     enum Result: Equatable {
-        /// No closing intent — proceed normally.
         case none
-        /// Utterance is purely closing — farewell immediately,
-        /// no reply generation.
         case closeNow
-        /// Closing phrases trailed a request — answer the request,
-        /// then deliver the farewell after the reply finishes.
         case closeAfterResponse
+    }
+
+    struct Evaluation: Equatable {
+        let result: Result
+        let requestRemainder: String?
     }
 
     static func evaluate(
         userText: String,
         normalizedText: (String) -> String
-    ) -> Result {
+    ) -> Evaluation {
         var text = normalizedText(userText)
         guard !text.isEmpty else {
-            return .none
+            return Evaluation(result: .none, requestRemainder: nil)
         }
         guard text.hasSuffix(" atlas") else {
-            return .none
+            return Evaluation(result: .none, requestRemainder: nil)
         }
         text = String(text.dropLast(" atlas".count))
             .trimmingCharacters(in: .whitespaces)
@@ -77,7 +77,7 @@ enum ConversationClosing {
             }
         ) {
             if remaining == phrase {
-                return .closeNow
+                return Evaluation(result: .closeNow, requestRemainder: nil)
             }
 
             remaining = String(
@@ -86,6 +86,13 @@ enum ConversationClosing {
             .trimmingCharacters(in: .whitespaces)
         }
 
-        return .closeAfterResponse
+        guard !remaining.isEmpty else {
+            return Evaluation(result: .closeNow, requestRemainder: nil)
+        }
+
+        return Evaluation(
+            result: .closeAfterResponse,
+            requestRemainder: remaining
+        )
     }
 }

@@ -126,11 +126,11 @@ extension VoiceAssistant {
             )
             let activeReminder = await notificationCoordinator?
                 .acknowledgementEligibleReminderSnapshot()
-
-            let closing = ConversationClosing.evaluate(
+            let evaluation = ConversationClosing.evaluate(
                 userText: userText,
                 normalizedText: normalizedText
             )
+            let closing = evaluation.result
             let shouldRequestName = await nameRequestPending
             var acknowledgedReminder = false
             if closing != .none, activeReminder != nil {
@@ -166,9 +166,9 @@ extension VoiceAssistant {
                     await self?.speakNameRequestFollowUp()
                 }
             }
-
+            let generationText = evaluation.requestRemainder ?? userText
             beginGenerationTurn(
-                userText: userText,
+                userText: generationText,
                 speakerIdentity: speakerIdentity,
                 speakerInstruction: speakerInstruction,
                 playThinkingFiller: !wakeOnly,
