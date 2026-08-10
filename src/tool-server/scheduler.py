@@ -62,6 +62,13 @@ class Scheduler:
     def run_due(self):
         now = now_utc()
 
+        superseded = self.repository.expire_stale_recurring_reminders(now)
+        if superseded > 0:
+            self.logger.info(
+                "Superseded %d unacknowledged recurring reminder occurrence(s).",
+                superseded,
+            )
+
         while reminder := self.repository.claim_due_reminder(now):
             reminder_id, text = reminder
             self.repository.enqueue_speech(SpeechKind.REMINDER, text, reminder_id)

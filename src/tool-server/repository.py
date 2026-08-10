@@ -12,7 +12,8 @@ from models import (
     SpeechKind,
     SpeechStatus,
 )
-from time_utils import now_utc, to_storage
+from recurrence import next_occurrence
+from time_utils import now_utc, to_storage, from_storage, TIMEZONE
 
 
 class Repository:
@@ -30,7 +31,7 @@ class Repository:
                 .values(status=SpeechStatus.QUEUED, activated_at_utc=None)
             )
 
-    def create_reminder(self, text, scheduled_for, sequence_id=None):
+    def create_reminder(self, text, scheduled_for, sequence_id=None, recurrence=None):
         now = to_storage(now_utc())
         with Session.begin() as session:
             row = ReminderRow(
@@ -38,6 +39,7 @@ class Repository:
                 scheduled_for_utc=to_storage(scheduled_for),
                 status=ReminderStatus.SCHEDULED,
                 sequence_id=sequence_id,
+                recurrence_json=json.dumps(recurrence) if recurrence else None,
                 created_at_utc=now,
             )
             session.add(row)
@@ -100,13 +102,14 @@ class Repository:
             )
             return result.rowcount == 1
 
-    def create_sequence(self, actions, scheduled_for):
+    def create_sequence(self, actions, scheduled_for, recurrence=None):
         now = to_storage(now_utc())
         with Session.begin() as session:
             row = SequenceRow(
                 actions_json=json.dumps(actions),
                 scheduled_for_utc=to_storage(scheduled_for),
                 status=SequenceStatus.SCHEDULED,
+                recurrence_json=json.dumps(recurrence) if recurrence else None,
                 created_at_utc=now,
             )
             session.add(row)
@@ -160,6 +163,26 @@ class Repository:
 
     def finish_sequence(self, sequence_id, error=None):
         with Session.begin() as session:
+            row = session.get(SequenceRow, sequence_id)
+            if row is None:
+                return
+
+            if error is None and row.recurrence_json:
+                rule = json.loads(row.recurrence_json)
+                anchor_local = from_storage(row.scheduled_for_utc).astimezone(TIMEZONE)
+                next_local = next_occurrence(rule, anchor_local)
+                session.execute(
+                    update(SequenceRow)
+                    .where(SequenceRow.id == sequence_id)
+                    .values(
+                        status=SequenceStatus.SCHEDULED,
+                        scheduled_for_utc=to_storage(next_local),
+                        completed_at_utc=to_storage(now_utc()),
+                        error=None,
+                    )
+                )
+                return
+
             session.execute(
                 update(SequenceRow)
                 .where(SequenceRow.id == sequence_id)
@@ -248,16 +271,67 @@ class Repository:
             item.status = SpeechStatus.ACKNOWLEDGED
             item.acknowledged_at_utc = now
 
-            result = session.execute(
-                update(ReminderRow)
-                .where(
-                    ReminderRow.id == item.reminder_id,
-                    ReminderRow.status == ReminderStatus.ACTIVE,
-                )
-                .values(status=ReminderStatus.ACKNOWLEDGED, acknowledged_at_utc=now)
-            )
+            reminder = session.get(ReminderRow, item.reminder_id)
+            if reminder is None or reminder.status != ReminderStatus.ACTIVE:
+                return None
 
-            return item.reminder_id if result.rowcount == 1 else None
+            if reminder.recurrence_json:
+                rule = json.loads(reminder.recurrence_json)
+                anchor_local = from_storage(reminder.scheduled_for_utc).astimezone(
+                    TIMEZONE
+                )
+                next_local = next_occurrence(rule, anchor_local)
+                reminder.status = ReminderStatus.SCHEDULED
+                reminder.scheduled_for_utc = to_storage(next_local)
+                reminder.activated_at_utc = None
+                reminder.acknowledged_at_utc = now
+            else:
+                reminder.status = ReminderStatus.ACKNOWLEDGED
+                reminder.acknowledged_at_utc = now
+
+            return reminder.id
+
+    def expire_stale_recurring_reminders(self, now):
+        now_local = now.astimezone(TIMEZONE)
+        superseded = 0
+
+        with Session.begin() as session:
+            rows = session.scalars(
+                select(ReminderRow).where(
+                    ReminderRow.status == ReminderStatus.ACTIVE,
+                    ReminderRow.recurrence_json.is_not(None),
+                )
+            ).all()
+
+            for reminder in rows:
+                rule = json.loads(reminder.recurrence_json)
+                anchor_local = from_storage(reminder.scheduled_for_utc).astimezone(
+                    TIMEZONE
+                )
+                next_local = next_occurrence(rule, anchor_local)
+
+                if next_local > now_local:
+                    continue
+
+                item = session.scalars(
+                    select(SpeechItemRow)
+                    .where(
+                        SpeechItemRow.reminder_id == reminder.id,
+                        SpeechItemRow.status == SpeechStatus.ACTIVE,
+                    )
+                    .limit(1)
+                ).first()
+                if item is not None:
+                    item.status = SpeechStatus.ACKNOWLEDGED
+                    item.acknowledged_at_utc = to_storage(now)
+
+                reminder.status = ReminderStatus.SCHEDULED
+                reminder.scheduled_for_utc = to_storage(next_local)
+                reminder.activated_at_utc = None
+                reminder.acknowledged_at_utc = None
+                superseded += 1
+
+        return superseded
 
     def create_speaker_profile(
         self,

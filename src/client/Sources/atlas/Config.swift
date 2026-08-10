@@ -16,6 +16,7 @@ struct Config {
     static let speakerIdentificationTimeout: TimeInterval = 2
     static let speechPollIntervalSeconds: TimeInterval = 2
     static let reminderRepeatIntervalSeconds: TimeInterval = 30
+    static let reminderMaxAnnouncements = 20
     static let ollamaContextWindow = 8192
     static let ollamaDefaultTemperature = 0.2
 

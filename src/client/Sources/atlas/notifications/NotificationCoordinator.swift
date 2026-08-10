@@ -170,6 +170,15 @@ actor NotificationCoordinator {
             return
         }
 
+        guard reminder.announcementCount < Config.reminderMaxAnnouncements else {
+            print(
+                "[speech] reminder \(reminder.speech.id) hit the announcement cap; "
+                    + "dropping local state"
+            )
+            activeReminder = nil
+            return
+        }
+
         guard !reminder.isDeliveryInFlight else {
             return
         }

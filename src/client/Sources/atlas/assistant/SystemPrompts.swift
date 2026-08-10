@@ -65,6 +65,11 @@ enum SystemPrompts {
         scheduled time or date information.
         - Use list_reminders and list_sequences when the user asks what is scheduled.
         - Use cancel_reminder or cancel_sequence when the user asks to cancel one.
+        - If the user asks for a repeating reminder or sequence, pass their
+        recurrence words in repeat, for example "every day", "weekdays",
+        "every Monday and Friday", or "every 2 hours".
+        - Repeating schedules need a time of day. If the user does not give
+        one, ask.
 
         # Active reminder
         - When a reminder is active, follow the active-reminder system instruction.

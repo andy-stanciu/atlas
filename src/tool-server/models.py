@@ -49,6 +49,7 @@ class ReminderRow(Base):
     sequence_id: Mapped[int | None] = mapped_column(
         ForeignKey("sequences.id"), nullable=True
     )
+    recurrence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at_utc: Mapped[str] = mapped_column(String, nullable=False)
     activated_at_utc: Mapped[str | None] = mapped_column(String, nullable=True)
     acknowledged_at_utc: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -66,6 +67,7 @@ class SequenceRow(Base):
         String, nullable=False, default=SequenceStatus.SCHEDULED
     )
     actions_json: Mapped[str] = mapped_column(Text, nullable=False)
+    recurrence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at_utc: Mapped[str] = mapped_column(String, nullable=False)
     completed_at_utc: Mapped[str | None] = mapped_column(String, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -76,9 +78,6 @@ Index("sequences_due", SequenceRow.status, SequenceRow.scheduled_for_utc)
 
 class SpeechItemRow(Base):
     __tablename__ = "speech_items"
-    __table_args__ = (
-        UniqueConstraint("reminder_id", name="one_speech_item_per_reminder"),
-    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     kind: Mapped[str] = mapped_column(String, nullable=False)

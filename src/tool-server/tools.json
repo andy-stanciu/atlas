@@ -72,7 +72,7 @@
     "type": "function",
     "function": {
       "name": "schedule_reminder",
-      "description": "Schedule a spoken message that repeats until the user acknowledges it. Give in_minutes, or time with optional date.",
+      "description": "Schedule a spoken message that repeats until the user acknowledges it. Give in_minutes, or time with optional date. If the user asks for it to repeat, also give repeat.",
       "parameters": {
         "type": "object",
         "required": [
@@ -89,11 +89,15 @@
           },
           "time": {
             "type": "string",
-            "description": "Clock time as h:mm AM or h:mm PM. Without date, uses the next future occurrence."
+            "description": "Clock time as h:mm AM or h:mm PM. Without date, uses the next future occurrence. Required when repeat is used."
           },
           "date": {
             "type": "string",
             "description": "Date as YYYY-MM-DD. Only valid together with time."
+          },
+          "repeat": {
+            "type": "string",
+            "description": "Recurrence in the user's own words, e.g. 'every day', 'weekdays', 'weekends', 'every week', 'every month', 'every hour', 'every 2 hours', 'every Monday and Friday'. Omit for one-time. Requires time."
           }
         }
       }
@@ -144,7 +148,7 @@
     "type": "function",
     "function": {
       "name": "schedule_sequence",
-      "description": "Schedule one or more sequential actions starting at a future time. For a single spoken message, use schedule_reminder instead.",
+      "description": "Schedule one or more sequential actions starting at a future time. For a single spoken message, use schedule_reminder instead. If the user asks for it to repeat, also give repeat.",
       "parameters": {
         "type": "object",
         "required": [
@@ -157,11 +161,15 @@
           },
           "time": {
             "type": "string",
-            "description": "Clock time as h:mm AM or h:mm PM. Without date, uses the next future occurrence."
+            "description": "Clock time as h:mm AM or h:mm PM. Without date, uses the next future occurrence. Required when repeat is used."
           },
           "date": {
             "type": "string",
             "description": "Date as YYYY-MM-DD. Only valid together with time."
+          },
+          "repeat": {
+            "type": "string",
+            "description": "Recurrence in the user's own words, e.g. 'every day', 'weekdays', 'weekends', 'every week', 'every month', 'every hour', 'every 2 hours', 'every Monday and Friday'. Omit for one-time. Requires time."
           },
           "actions": {
             "type": "array",
