@@ -252,16 +252,23 @@ extension VoiceAssistant {
                         throw CancellationError()
                     }
 
+                    guard
+                        let speakable = ReplyPostProcessor.process(
+                            sentence, hasPriorSentence: printedAnyText)
+                    else {
+                        return
+                    }
+
                     if printedAnyText {
                         print(" ", terminator: "")
                     }
 
-                    print(sentence, terminator: "")
+                    print(speakable, terminator: "")
                     fflush(stdout)
                     printedAnyText = true
 
                     try await self.playback.queueAssistantReply(
-                        sentence,
+                        speakable,
                         for: turnID,
                         isCurrentTurn: { [weak self] id in
                             self?.isCurrentTurn(id) ?? false
@@ -276,16 +283,19 @@ extension VoiceAssistant {
                 }
 
                 if !printedAnyText, !fullReply.isEmpty {
-                    print(fullReply, terminator: "")
-                    fflush(stdout)
+                    let speakable = ReplyPostProcessor.processReply(fullReply)
+                    if !speakable.isEmpty {
+                        print(speakable, terminator: "")
+                        fflush(stdout)
 
-                    try await self.playback.queueAssistantReply(
-                        fullReply,
-                        for: turnID,
-                        isCurrentTurn: { [weak self] id in
-                            self?.isCurrentTurn(id) ?? false
-                        }
-                    )
+                        try await self.playback.queueAssistantReply(
+                            speakable,
+                            for: turnID,
+                            isCurrentTurn: { [weak self] id in
+                                self?.isCurrentTurn(id) ?? false
+                            }
+                        )
+                    }
                 }
 
                 let elapsed = CACurrentMediaTime() - startedAt
