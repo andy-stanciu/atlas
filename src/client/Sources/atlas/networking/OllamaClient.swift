@@ -172,7 +172,7 @@ final class OllamaClient: @unchecked Sendable {
         let response = try await chat(
             messages: messages,
             tools: [],
-            temperature: 0.5
+            temperature: Config.ollamaConversationalTemperature
         )
 
         return response.content.trimmingCharacters(
@@ -194,7 +194,7 @@ final class OllamaClient: @unchecked Sendable {
                 ),
             ],
             tools: [],
-            temperature: Config.ollamaDefaultTemperature
+            temperature: Config.ollamaConversationalTemperature
         )
 
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -210,6 +210,7 @@ final class OllamaClient: @unchecked Sendable {
                 Message(role: "user", content: utterance),
             ],
             tools: [],
+            // extraction should be temperature 0
             temperature: 0
         )
 
@@ -233,7 +234,7 @@ final class OllamaClient: @unchecked Sendable {
                 Message(role: "user", content: "My name is \(name)."),
             ],
             tools: [],
-            temperature: 0.5
+            temperature: Config.ollamaConversationalTemperature
         )
 
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -250,7 +251,7 @@ final class OllamaClient: @unchecked Sendable {
                 Message(role: "user", content: "I'd rather not share my name."),
             ],
             tools: [],
-            temperature: 0.5
+            temperature: Config.ollamaConversationalTemperature
         )
 
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)

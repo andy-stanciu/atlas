@@ -19,9 +19,10 @@ struct Config {
     static let reminderMaxAnnouncements = 20
     static let ollamaContextWindow = 8192
     static let ollamaDefaultTemperature = 0.2
+    static let ollamaConversationalTemperature = 0.9
 
     static let ollamaModel = "qwen3.5:9b"
-    static let maxToolLoopSteps = 10
+    static let maxToolLoopSteps = 16
 
     static let pythonExecutable =
         ProcessInfo.processInfo.environment["PYTHON_EXECUTABLE"]
@@ -43,8 +44,8 @@ struct Config {
     static let interruptGracePeriodSeconds: CFTimeInterval = 2.0
 
     static let speakerReinforceThreshold = 0.60
-    static let speakerReinforceMinimumDurationSeconds = 4.0
-    static let speakerEnrollmentMinimumClipSeconds = 4.0
+    static let speakerReinforceMinimumDurationSeconds = 3.0
+    static let speakerEnrollmentMinimumClipSeconds = 3.0
 
     static let wakeGreetings = [
         "hey",
