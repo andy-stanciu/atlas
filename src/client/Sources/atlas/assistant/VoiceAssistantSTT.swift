@@ -38,8 +38,6 @@ extension VoiceAssistant {
         }
     }
 
-    // MARK: - Timing
-
     func timed<T>(
         _ label: String,
         _ action: () async throws -> T
@@ -48,8 +46,8 @@ extension VoiceAssistant {
         let result = try await action()
         let elapsed = CACurrentMediaTime() - startedAt
 
-        print(
-            "\n[timing] \(label): "
+        Log.timing(
+            "\(label): "
                 + "\(String(format: "%.3f", elapsed)) s"
         )
 

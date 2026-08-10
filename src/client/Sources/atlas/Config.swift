@@ -20,6 +20,9 @@ struct Config {
     static let ollamaContextWindow = 8192
     static let ollamaDefaultTemperature = 0.2
     static let ollamaConversationalTemperature = 0.9
+    static let printTimingDebug = false;
+    static let printSpeakerDebug = true;
+    static let printToolCallDebug = true;
 
     static let ollamaModel = "qwen3.5:9b"
     static let maxToolLoopSteps = 16

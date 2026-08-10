@@ -22,7 +22,8 @@ extension VoiceAssistant {
             await feedChain.value
 
             guard let client else {
-                print("\n[stt] Not connected to sttd, dropping turn.")
+                Log.blank()
+                Log.system("Not connected to sttd, dropping turn.")
                 transitionToListening()
                 return
             }
@@ -33,7 +34,8 @@ extension VoiceAssistant {
 
             guard !transcript.isEmpty else {
                 consoleTranscript.clear()
-                print("\nNo speech recognized.")
+                Log.blank()
+                Log.system("No speech recognized.")
                 transitionToListening()
                 return
             }
@@ -82,27 +84,27 @@ extension VoiceAssistant {
                     try await speakerClient.identify(wavURL)
                 }
             } catch {
-                print("[speaker] identify request failed: \(error.localizedDescription)")
+                Log.speaker("identify request failed: \(error.localizedDescription)")
                 speakerResponse = nil
             }
 
             let speakerIdentity = speakerResponse?.identity
 
             if let speakerIdentity {
-                print(
-                    "[speaker] known: \(speakerIdentity.displayName) "
+                Log.speaker(
+                    "known: \(speakerIdentity.displayName) "
                         + "(similarity=\(String(format: "%.3f", speakerIdentity.similarity)))"
                 )
             } else if let speakerResponse {
-                print(
-                    "[speaker] status=\(speakerResponse.status.rawValue) "
+                Log.speaker(
+                    "status=\(speakerResponse.status.rawValue) "
                         + "similarity="
                         + "\(speakerResponse.similarity.map { String(format: "%.3f", $0) } ?? "n/a") "
                         + "duration="
                         + "\(speakerResponse.durationSeconds.map { String(format: "%.2f", $0) } ?? "n/a")s"
                 )
             } else {
-                print("[speaker] identify unavailable this turn")
+                Log.speaker("identify unavailable this turn")
             }
 
             if speakerEnrollment.isAwaitingName {
@@ -177,7 +179,7 @@ extension VoiceAssistant {
         } catch {
             let nsError = error as NSError
 
-            print(
+            Log.system(
                 """
 
                 [pipeline error]
@@ -208,9 +210,6 @@ extension VoiceAssistant {
         }
 
         consoleTranscript.clear()
-        print("Atlas: ", terminator: "")
-        fflush(stdout)
-
         if playThinkingFiller {
             let filler = nextThinkingFiller()
 
@@ -259,12 +258,10 @@ extension VoiceAssistant {
                         return
                     }
 
-                    if printedAnyText {
-                        print(" ", terminator: "")
-                    }
-
-                    print(speakable, terminator: "")
-                    fflush(stdout)
+                    Log.transcript(
+                        (printedAnyText ? " " : "Atlas: ") + speakable,
+                        terminator: ""
+                    )
                     printedAnyText = true
 
                     try await self.playback.queueAssistantReply(
@@ -285,9 +282,7 @@ extension VoiceAssistant {
                 if !printedAnyText, !fullReply.isEmpty {
                     let speakable = ReplyPostProcessor.processReply(fullReply)
                     if !speakable.isEmpty {
-                        print(speakable, terminator: "")
-                        fflush(stdout)
-
+                        Log.transcript(speakable, terminator: "")
                         try await self.playback.queueAssistantReply(
                             speakable,
                             for: turnID,
@@ -299,8 +294,7 @@ extension VoiceAssistant {
                 }
 
                 let elapsed = CACurrentMediaTime() - startedAt
-                print()
-                print("[timing] LLM stream complete: \(String(format: "%.3f", elapsed)) s\n")
+                Log.timing("LLM stream complete: \(String(format: "%.3f", elapsed))s")
 
                 if let onCompletion {
                     await onCompletion()
@@ -312,7 +306,7 @@ extension VoiceAssistant {
                     return
                 }
 
-                print(
+                Log.system(
                     "\n[pipeline error] "
                         + error.localizedDescription
                 )
@@ -340,9 +334,7 @@ extension VoiceAssistant {
             return
         }
 
-        print("Atlas: \(prompt)")
-        fflush(stdout)
-
+        Log.transcript("Atlas: \(prompt)")
         let turnID = UUID()
         lock.withLock {
             activeTurnID = turnID
@@ -412,9 +404,7 @@ extension VoiceAssistant {
             return
         }
 
-        print("Atlas: \(farewell)")
-        fflush(stdout)
-
+        Log.transcript("Atlas: \(farewell)")
         let turnID = UUID()
 
         lock.withLock {

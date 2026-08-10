@@ -111,12 +111,12 @@ final class SpeakerEnrollmentCoordinator {
                         profileID: profileID, name: extractedName
                     )
                     if result.ok {
-                        print(
-                            "[speaker] promoted anonymous profile \(profileID) to: \(extractedName)"
+                        Log.speaker(
+                            "promoted anonymous profile \(profileID) to: \(extractedName)"
                         )
                     }
                 } catch {
-                    print("[speaker] promotion failed: \(error.localizedDescription)")
+                    Log.speaker("promotion failed: \(error.localizedDescription)")
                 }
             }
             anonymousProfileID = nil
@@ -153,13 +153,13 @@ final class SpeakerEnrollmentCoordinator {
                     wavURLs: [enrollCopy]
                 )
                 if let profile = result.profile {
-                    print(
-                        "[speaker] anonymous profile enrolled: id=\(profile.id) "
+                    Log.speaker(
+                        "anonymous profile enrolled: id=\(profile.id) "
                             + "samples=\(profile.sampleCount)"
                     )
                 }
             } catch {
-                print("[speaker] anonymous enrollment failed: \(error.localizedDescription)")
+                Log.speaker("anonymous enrollment failed: \(error.localizedDescription)")
             }
         }
     }
@@ -188,8 +188,8 @@ final class SpeakerEnrollmentCoordinator {
                 profileID: profileID, wavURL: reinforceCopy
             )
             if result.accepted {
-                print(
-                    "[speaker] reinforced profile \(profileID) "
+                Log.speaker(
+                    "reinforced profile \(profileID) "
                         + "(similarity=\(similarity), duration=\(durationSeconds)s)"
                 )
             }
@@ -198,7 +198,7 @@ final class SpeakerEnrollmentCoordinator {
             }
             return result.askIdentification == true
         } catch {
-            print("[speaker] reinforcement failed: \(error.localizedDescription)")
+            Log.speaker("reinforcement failed: \(error.localizedDescription)")
             return false
         }
     }

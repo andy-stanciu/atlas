@@ -14,7 +14,8 @@ extension VoiceAssistant {
             ]
         }
         soundEffects.play("startup")
-        print("\nAtlas is listening.")
+        Log.blank()
+        Log.system("Atlas is listening.")
     }
 
     func beginReminderConversation() {
@@ -28,8 +29,8 @@ extension VoiceAssistant {
                 Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
-
-        print("\nAtlas is listening for your reminder response.")
+        Log.blank()
+        Log.system("Atlas is listening for your reminder response.")
         resetConversationTimeout()
     }
 
@@ -85,7 +86,8 @@ extension VoiceAssistant {
 
         if didEnd {
             soundEffects.play("shutdown")
-            print("\nAtlas conversation ended. Say “Hey Atlas” to start again.")
+            Log.blank()
+            Log.system("Atlas conversation ended. Say “Hey Atlas” to start again.")
         }
     }
 

@@ -40,7 +40,7 @@ final class OllamaClient: @unchecked Sendable {
 
             let body = String(decoding: data, as: UTF8.self)
 
-            print(
+            Log.system(
                 "Ollama request failed. "
                     + "HTTP \(statusCode). Response: \(body)"
             )
@@ -63,7 +63,7 @@ final class OllamaClient: @unchecked Sendable {
                 from: data
             )
         } catch {
-            print(
+            Log.system(
                 "Ollama response decode failed: "
                     + String(decoding: data, as: UTF8.self)
             )

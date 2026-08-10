@@ -94,8 +94,8 @@ extension VoiceAssistant {
                 clearPreRoll()
                 shouldCancelTimeout = conversationActive
                 beginRecognizerSession(preRoll: recording)
-                print("\nListening...", terminator: "")
-                fflush(stdout)
+                Log.blank()
+                Log.system("Listening...", terminator: "")
             }
 
         case .recording:
@@ -181,9 +181,8 @@ extension VoiceAssistant {
                     self.queuedAudioBuffers = 0
                     self.currentPlaybackPurpose = nil
                 }
-
-                print("\nInterrupted. Listening...", terminator: "")
-                fflush(stdout)
+                Log.blank()
+                Log.system("Interrupted. Listening...", terminator: "")
             }
         }
 

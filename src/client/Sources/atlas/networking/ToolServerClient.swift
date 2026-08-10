@@ -178,5 +178,6 @@ final class ToolServerClient: @unchecked Sendable {
 
         _ = try JSONSerialization.jsonObject(with: data)
         return String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

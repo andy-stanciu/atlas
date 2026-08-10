@@ -23,7 +23,7 @@ final class SoundEffects {
                         subdirectory: "sfx"
                     )
                 else {
-                    print("[sound effect missing] \(name).\(fileExtension)")
+                    Log.system("[sound effect missing] \(name).\(fileExtension)")
                     return
                 }
 
@@ -34,7 +34,7 @@ final class SoundEffects {
 
                 self.players[name] = player
             } catch {
-                print("[sound effect error] \(name): \(error.localizedDescription)")
+                Log.system("[sound effect error] \(name): \(error.localizedDescription)")
             }
         }
     }

@@ -58,11 +58,11 @@ enum ReplyPostProcessor {
         if hasPriorSentence,
             let phrase = followUpPhrases.first(where: { lowered.contains($0) })
         {
-            print("[postprocess] dropped (follow-up phrase '\(phrase)'): \(sentence)")
+            Log.postprocess("dropped (follow-up phrase '\(phrase)'): \(sentence)")
             return nil
         }
         guard isSpeakable(sentence) else {
-            print("[postprocess] dropped (unspeakable characters): \(sentence)")
+            Log.postprocess("dropped (unspeakable characters): \(sentence)")
             return nil
         }
         return rewriteTimes(in: sentence)

@@ -76,7 +76,7 @@ actor NotificationCoordinator {
             } catch is CancellationError {
                 return
             } catch {
-                print(
+                Log.system(
                     "[speech] polling error: "
                         + error.localizedDescription
                 )
@@ -157,7 +157,7 @@ actor NotificationCoordinator {
                 speechID: speech.id
             )
         } catch {
-            print(
+            Log.system(
                 "[speech] announcement delivery failed for "
                     + "\(speech.id): "
                     + error.localizedDescription
@@ -171,7 +171,7 @@ actor NotificationCoordinator {
         }
 
         guard reminder.announcementCount < Config.reminderMaxAnnouncements else {
-            print(
+            Log.system(
                 "[speech] reminder \(reminder.speech.id) hit the announcement cap; "
                     + "dropping local state"
             )
@@ -214,7 +214,7 @@ actor NotificationCoordinator {
                 outcome: outcome
             )
         } catch {
-            print(
+            Log.system(
                 "[speech] reminder delivery failed for "
                     + "\(speechID): "
                     + error.localizedDescription
@@ -299,7 +299,7 @@ actor NotificationCoordinator {
                 return false
             }
         } catch {
-            print(
+            Log.system(
                 "[speech] reminder acknowledgement failed: "
                     + error.localizedDescription
             )

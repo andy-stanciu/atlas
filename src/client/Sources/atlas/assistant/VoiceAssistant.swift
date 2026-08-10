@@ -99,7 +99,7 @@ final class VoiceAssistant {
                 lock.withLock {
                     self?.sttClient = client
                 }
-                print("[stt] Connected to sttd.")
+                Log.system("Connected to sttd.")
             } catch {
                 fatalError(
                     "Could not connect to sttd — start it with "
@@ -115,13 +115,13 @@ final class VoiceAssistant {
     }
 
     func start() async throws {
-        print("Connecting to speech recognition daemon...")
+        Log.system("Connecting to speech recognition daemon...")
         await sttConnectTask.value
 
         try configureAudioEngine()
         startNotificationCoordinator()
 
-        print(
+        Log.system(
             """
             Voice-processing audio engine started.
             Say “Hey Atlas” or “Hi Atlas” to begin. Press Ctrl-C to quit.

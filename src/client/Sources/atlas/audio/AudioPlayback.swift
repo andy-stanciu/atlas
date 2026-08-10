@@ -150,8 +150,8 @@ final class AudioPlayback: @unchecked Sendable {
                     let wavURL = try kokoro.synthesize(text: text)
                     let elapsed = CACurrentMediaTime() - startedAt
 
-                    print(
-                        "\n[timing] TTS sentence: "
+                    Log.timing(
+                        "TTS sentence: "
                             + "\(String(format: "%.3f", elapsed)) s"
                     )
 

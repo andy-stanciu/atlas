@@ -156,15 +156,14 @@ final class ConversationEngine: @unchecked Sendable {
             )
 
             if !calls.isEmpty {
-                print("\n[tool loop] step \(step + 1)")
-                print(
-                    "[tool loop] tool calls: "
+                Log.toolLoop("step \(step + 1)")
+                Log.toolLoop(
+                    "tool calls: "
                         + String(
                             describing: calls.map(\.function.name)
                         )
                 )
-                fflush(stdout)
-                await onToolBatch(toolCalls)
+                await onToolBatch(calls)
                 for call in calls {
                     try Task.checkCancellation()
                     attemptedToolNames.append(call.function.name)
@@ -173,12 +172,7 @@ final class ConversationEngine: @unchecked Sendable {
                     let result = try await toolServer.runTool(call)
                     try Task.checkCancellation()
                     toolResults.append(result)
-
-                    print(
-                        "[tool result] \(call.function.name): \(result)"
-                    )
-                    fflush(stdout)
-
+                    Log.toolResult(call.function.name, result)
                     if toolSucceeded(result) {
                         successfulToolNames.append(call.function.name)
 

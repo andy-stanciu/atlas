@@ -182,13 +182,11 @@ extension VoiceAssistant {
                             effectName = "announcement"
                         }
                         self.soundEffects.play(effectName)
-
-                        print(
-                            "\n[\(speech.kind.rawValue) \(number)] "
+                        Log.system(
+                            "[\(speech.kind.rawValue) \(number)] "
                                 + speech.text
                         )
-                        print("Atlas: \(spokenText)")
-                        fflush(stdout)
+                        Log.transcript("Atlas: \(spokenText)")
 
                         if speech.kind == .reminder,
                             !wasConversationActive

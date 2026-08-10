@@ -12,12 +12,14 @@ final class ConsoleTranscript {
             return
         }
 
+        guard Log.isInteractiveTerminal else {
+            return
+        }
+
         let prefixed = "\(prefix): \(text)"
 
         erase()
-        print(prefixed, terminator: "")
-        fflush(stdout)
-
+        Log.transcript(prefixed, terminator: "")
         activeLineCount = lineCount(for: prefixed)
     }
 
@@ -27,10 +29,14 @@ final class ConsoleTranscript {
     }
 
     private func erase() {
-        if activeLineCount > 1 {
-            print("\u{1B}[\(activeLineCount - 1)A", terminator: "")
+        guard Log.isInteractiveTerminal else {
+            return
         }
-        print("\r\u{1B}[0J", terminator: "")
+
+        if activeLineCount > 1 {
+            Log.control("\u{1B}[\(activeLineCount - 1)A")
+        }
+        Log.control("\r\u{1B}[0J")
     }
 
     private func lineCount(for text: String) -> Int {
