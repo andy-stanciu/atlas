@@ -74,6 +74,9 @@ struct Config {
         "Give me a second.",
     ]
 
+    static let speakerNameRequestFallback: String =
+        "By the way, I don't think we've met. What's your name? No worries if you'd rather not share it."
+
     static let sfxVolume: Float = 0.7
     static let speakingVolume: Float = 0.9
     static let toolCueFrequency1: Double = 880

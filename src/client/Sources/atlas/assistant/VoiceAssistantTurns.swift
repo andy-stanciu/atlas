@@ -161,7 +161,7 @@ extension VoiceAssistant {
                 onCompletion = { [weak self] in
                     self?.scheduleConversationEndAfterSpeech()
                 }
-            } else if shouldRequestName {
+            } else if shouldRequestName || speakerEnrollment.hasPendingNameRequest {
                 onCompletion = { [weak self] in
                     await self?.speakNameRequestFollowUp()
                 }
@@ -322,6 +322,10 @@ extension VoiceAssistant {
     }
 
     func speakNameRequestFollowUp() async {
+        guard !hasActiveUserTurn() else {
+            speakerEnrollment.rescheduleNameRequest()
+            return
+        }
         guard let prompt = await speakerEnrollment.beginNameRequest() else {
             return
         }

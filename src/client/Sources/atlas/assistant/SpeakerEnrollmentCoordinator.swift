@@ -8,74 +8,17 @@ final class SpeakerEnrollmentCoordinator {
     private var latestUnknownSpeakerWAV: URL?
     private(set) var isAwaitingName = false
 
+    private var nameRequestPending = false
+
+    private var nameRequestTask: Task<String?, Never>?
+
+    var hasPendingNameRequest: Bool {
+        nameRequestPending && !isAwaitingName
+    }
+
     init(speakerClient: SpeakerClient, ollama: OllamaClient) {
         self.speakerClient = speakerClient
         self.ollama = ollama
-    }
-
-    func beginNameRequest() async -> String? {
-        do {
-            let prompt = try await ollama.generateSpeakerNameRequest()
-            guard !prompt.isEmpty else {
-                return nil
-            }
-            isAwaitingName = true
-            return prompt
-        } catch {
-            print("[speaker] failed to generate name request: \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    func resolveNameResponse(userText: String) async -> String {
-        isAwaitingName = false
-
-        let extractedName = try? await ollama.extractSpeakerName(from: userText)
-
-        if let extractedName, let profileID = anonymousProfileID {
-            Task { [speakerClient] in
-                do {
-                    let result = try await speakerClient.promote(
-                        profileID: profileID, name: extractedName
-                    )
-                    if result.ok {
-                        print(
-                            "[speaker] promoted anonymous profile \(profileID) to: \(extractedName)"
-                        )
-                    }
-                } catch {
-                    print("[speaker] promotion failed: \(error.localizedDescription)")
-                }
-            }
-            anonymousProfileID = nil
-            clearLatestClip()
-            return SystemPrompts.speakerEnrollmentAcknowledgementInstruction
-        }
-
-        return SystemPrompts.speakerEnrollmentDeclineInstruction
-    }
-
-    private func enrollAnonymously(wavURL: URL) {
-        let enrollCopy = wavURL.deletingLastPathComponent()
-            .appendingPathComponent("enroll-anon-\(UUID().uuidString).wav")
-        try? FileManager.default.copyItem(at: wavURL, to: enrollCopy)
-
-        Task { [speakerClient] in
-            defer { try? FileManager.default.removeItem(at: enrollCopy) }
-            do {
-                let result = try await speakerClient.enrollAnonymous(
-                    wavURLs: [enrollCopy]
-                )
-                if let profile = result.profile {
-                    print(
-                        "[speaker] anonymous profile enrolled: id=\(profile.id) "
-                            + "samples=\(profile.sampleCount)"
-                    )
-                }
-            } catch {
-                print("[speaker] anonymous enrollment failed: \(error.localizedDescription)")
-            }
-        }
     }
 
     func processTurnResult(
@@ -124,6 +67,103 @@ final class SpeakerEnrollmentCoordinator {
         }
     }
 
+    func beginNameRequest() async -> String? {
+        guard nameRequestPending, !isAwaitingName else {
+            return nil
+        }
+
+        var generated: String?
+        if let task = nameRequestTask {
+            generated = await task.value
+            nameRequestTask = nil
+        }
+
+        let prompt: String
+        if let generated, !generated.isEmpty {
+            prompt = generated
+        } else {
+            prompt = Config.speakerNameRequestFallback
+        }
+
+        nameRequestPending = false
+        isAwaitingName = true
+        return prompt
+    }
+
+    func rescheduleNameRequest() {
+        guard isAwaitingName else {
+            return
+        }
+        isAwaitingName = false
+        nameRequestPending = true
+    }
+
+    func resolveNameResponse(userText: String) async -> String {
+        isAwaitingName = false
+        nameRequestTask = nil
+
+        let extractedName = try? await ollama.extractSpeakerName(from: userText)
+
+        if let extractedName, let profileID = anonymousProfileID {
+            Task { [speakerClient] in
+                do {
+                    let result = try await speakerClient.promote(
+                        profileID: profileID, name: extractedName
+                    )
+                    if result.ok {
+                        print(
+                            "[speaker] promoted anonymous profile \(profileID) to: \(extractedName)"
+                        )
+                    }
+                } catch {
+                    print("[speaker] promotion failed: \(error.localizedDescription)")
+                }
+            }
+            anonymousProfileID = nil
+            clearLatestClip()
+            return SystemPrompts.speakerEnrollmentAcknowledgementInstruction
+        }
+
+        return SystemPrompts.speakerEnrollmentDeclineInstruction
+    }
+
+    private func armNameRequest() {
+        guard !nameRequestPending else {
+            return
+        }
+        nameRequestPending = true
+        nameRequestTask = Task { [ollama] in
+            let generated = try? await ollama.generateSpeakerNameRequest()
+            guard let generated, !generated.isEmpty else {
+                return nil
+            }
+            return generated
+        }
+    }
+
+    private func enrollAnonymously(wavURL: URL) {
+        let enrollCopy = wavURL.deletingLastPathComponent()
+            .appendingPathComponent("enroll-anon-\(UUID().uuidString).wav")
+        try? FileManager.default.copyItem(at: wavURL, to: enrollCopy)
+
+        Task { [speakerClient] in
+            defer { try? FileManager.default.removeItem(at: enrollCopy) }
+            do {
+                let result = try await speakerClient.enrollAnonymous(
+                    wavURLs: [enrollCopy]
+                )
+                if let profile = result.profile {
+                    print(
+                        "[speaker] anonymous profile enrolled: id=\(profile.id) "
+                            + "samples=\(profile.sampleCount)"
+                    )
+                }
+            } catch {
+                print("[speaker] anonymous enrollment failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private func reinforceIfEligible(
         speakerResponse: SpeakerIdentificationResponse,
         wavURL: URL
@@ -152,6 +192,9 @@ final class SpeakerEnrollmentCoordinator {
                     "[speaker] reinforced profile \(profileID) "
                         + "(similarity=\(similarity), duration=\(durationSeconds)s)"
                 )
+            }
+            if result.askIdentification == true {
+                armNameRequest()
             }
             return result.askIdentification == true
         } catch {

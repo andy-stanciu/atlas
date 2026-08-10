@@ -220,4 +220,10 @@ extension VoiceAssistant {
             return conversationActive
         }
     }
+
+    func hasActiveUserTurn() -> Bool {
+        lock.withLock {
+            state == .recording || state == .processing
+        }
+    }
 }
