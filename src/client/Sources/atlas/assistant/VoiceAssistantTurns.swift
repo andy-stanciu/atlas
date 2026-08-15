@@ -39,6 +39,7 @@ extension VoiceAssistant {
                 transitionToListening()
                 return
             }
+            consoleTranscript.showFinal(transcript)
 
             let active = lock.withLock { conversationActive }
             let mergedPrefix = lock.withLock { () -> String? in

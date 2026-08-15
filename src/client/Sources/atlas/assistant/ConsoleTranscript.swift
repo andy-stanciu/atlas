@@ -23,6 +23,10 @@ final class ConsoleTranscript {
         activeLineCount = lineCount(for: prefixed)
     }
 
+    func showFinal(_ text: String, prefix: String = "You") {
+        showPartial(text, prefix: prefix)
+    }
+
     func clear() {
         erase()
         activeLineCount = 1
