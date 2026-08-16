@@ -18,56 +18,19 @@ func runAsyncBlocking<T>(_ operation: @escaping () async -> T) -> T {
     return box.value!
 }
 
-/// Tracks which connection (if any) should receive push ".partial"
-/// frames for the single shared recognizer's current session.
-final class ActiveConnectionBox {
-    private let lock = NSLock()
-    private var connection: STTFrameConnection?
-
-    func set(_ connection: STTFrameConnection?) {
-        lock.lock()
-        defer { lock.unlock() }
-        self.connection = connection
-    }
-
-    func clearIfCurrent(_ connection: STTFrameConnection) {
-        lock.lock()
-        defer { lock.unlock() }
-        if self.connection === connection {
-            self.connection = nil
-        }
-    }
-
-    func get() -> STTFrameConnection? {
-        lock.lock()
-        defer { lock.unlock() }
-        return connection
-    }
-}
-
 guard CommandLine.arguments.count >= 2 else {
     fputs("Usage: sttd <model-folder>\n", stderr)
     exit(1)
 }
 
 let modelFolder = CommandLine.arguments[1]
-let activeConnectionBox = ActiveConnectionBox()
 
 print("[sttd] Loading WhisperKit model from \(modelFolder)...")
 
 let recognizer: StreamingSpeechRecognizer = runAsyncBlocking {
     do {
         return try await StreamingSpeechRecognizer(
-            modelFolder: modelFolder,
-            partialUpdate: { update in
-                guard let connection = activeConnectionBox.get() else {
-                    return
-                }
-                try? connection.writeFrame(
-                    type: STTResponseType.partial.rawValue,
-                    payload: Data(update.text.utf8)
-                )
-            }
+            modelFolder: modelFolder
         )
     } catch {
         fputs("[sttd] Failed to load model: \(error.localizedDescription)\n", stderr)
@@ -103,7 +66,6 @@ func handleConnection(_ fd: Int32) {
 
         switch requestType {
         case .begin:
-            activeConnectionBox.set(connection)
             runAsyncBlocking {
                 await recognizer.begin()
             }
@@ -127,8 +89,6 @@ func handleConnection(_ fd: Int32) {
             }
 
         case .finish:
-            activeConnectionBox.clearIfCurrent(connection)
-
             let result: Result<String, Error> = runAsyncBlocking {
                 do {
                     let text = try await recognizer.finish()
@@ -152,7 +112,6 @@ func handleConnection(_ fd: Int32) {
             }
 
         case .cancel:
-            activeConnectionBox.clearIfCurrent(connection)
             runAsyncBlocking {
                 await recognizer.cancel()
             }
@@ -163,7 +122,6 @@ func handleConnection(_ fd: Int32) {
         }
     }
 
-    activeConnectionBox.clearIfCurrent(connection)
     connection.close()
 }
 

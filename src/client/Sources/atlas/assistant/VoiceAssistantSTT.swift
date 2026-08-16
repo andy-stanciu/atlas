@@ -32,12 +32,6 @@ extension VoiceAssistant {
         }
     }
 
-    func handleLiveTranscript(_ text: String) {
-        lock.withLock {
-            consoleTranscript.showPartial(text)
-        }
-    }
-
     func timed<T>(
         _ label: String,
         _ action: () async throws -> T

@@ -16,7 +16,7 @@ enum PlaybackPurpose: Equatable {
 }
 
 final class AudioPlayback: @unchecked Sendable {
-    private let player: AVAudioPlayerNode
+    private let satellite: SatelliteLink
     private let kokoro: KokoroWorker
     private let queue: DispatchQueue
     private let voiceFormat: AVAudioFormat
@@ -26,7 +26,7 @@ final class AudioPlayback: @unchecked Sendable {
     private let beginScheduledSpeech: () -> Bool
 
     init(
-        player: AVAudioPlayerNode,
+        satellite: SatelliteLink,
         kokoro: KokoroWorker,
         queue: DispatchQueue,
         voiceFormat: AVAudioFormat,
@@ -34,7 +34,7 @@ final class AudioPlayback: @unchecked Sendable {
         finishSpeaking: @escaping (PlaybackPurpose) -> Void,
         beginScheduledSpeech: @escaping () -> Bool
     ) {
-        self.player = player
+        self.satellite = satellite
         self.kokoro = kokoro
         self.queue = queue
         self.voiceFormat = voiceFormat
@@ -169,7 +169,7 @@ final class AudioPlayback: @unchecked Sendable {
         turnID: UUID,
         isCurrentTurn: @escaping @Sendable (UUID) -> Bool
     ) throws {
-        let outputBuffer = try makeOutputBuffer(from: wavURL)
+        let pcm = try makeOutputPCM(from: wavURL)
 
         guard isCurrentTurn(turnID) else {
             try? FileManager.default.removeItem(at: wavURL)
@@ -181,11 +181,7 @@ final class AudioPlayback: @unchecked Sendable {
             return
         }
 
-        player.scheduleBuffer(
-            outputBuffer,
-            at: nil,
-            options: []
-        ) { [weak self] in
+        satellite.enqueue(pcm: pcm) { [weak self] _ in
             try? FileManager.default.removeItem(at: wavURL)
             DispatchQueue.global(
                 qos: .userInitiated
@@ -193,9 +189,6 @@ final class AudioPlayback: @unchecked Sendable {
                 self?.finishSpeaking(purpose)
             }
         }
-
-        player.volume = Config.speakingVolume
-        player.play()
     }
 
     private func playScheduledWAV(
@@ -203,7 +196,7 @@ final class AudioPlayback: @unchecked Sendable {
         continuation: CheckedContinuation<SpeechPlaybackOutcome, Never>,
         onStarted: @escaping @Sendable () async -> Void
     ) throws {
-        let outputBuffer = try makeOutputBuffer(from: wavURL)
+        let pcm = try makeOutputPCM(from: wavURL)
 
         guard beginScheduledSpeech() else {
             try? FileManager.default.removeItem(at: wavURL)
@@ -211,32 +204,27 @@ final class AudioPlayback: @unchecked Sendable {
             return
         }
 
-        player.scheduleBuffer(
-            outputBuffer,
-            at: nil,
-            options: []
-        ) { [weak self] in
-            try? FileManager.default.removeItem(at: wavURL)
-
-            DispatchQueue.global(
-                qos: .userInitiated
-            ).async {
-                self?.finishSpeaking(.scheduledSpeech)
-                continuation.resume(returning: .completed)
-            }
-        }
-
-        player.volume = Config.speakingVolume
-        player.play()
-
-        Task {
+        // onStarted enqueues the chime; awaiting it first keeps the
+        // chime ahead of the speech in the sink's FIFO.
+        Task { [weak self] in
             await onStarted()
+            self?.satellite.enqueue(pcm: pcm) { played in
+                try? FileManager.default.removeItem(at: wavURL)
+                DispatchQueue.global(
+                    qos: .userInitiated
+                ).async {
+                    self?.finishSpeaking(.scheduledSpeech)
+                    continuation.resume(
+                        returning: played ? .completed : .interrupted
+                    )
+                }
+            }
         }
     }
 
-    private func makeOutputBuffer(
+    private func makeOutputPCM(
         from wavURL: URL
-    ) throws -> AVAudioPCMBuffer {
+    ) throws -> Data {
         let file = try AVAudioFile(forReading: wavURL)
         let sourceFrames = AVAudioFrameCount(file.length)
 
@@ -325,6 +313,29 @@ final class AudioPlayback: @unchecked Sendable {
                 )
         }
 
-        return outputBuffer
+        guard let floats = outputBuffer.floatChannelData else {
+            throw NSError(
+                domain: "Atlas",
+                code: 34,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Converted TTS buffer has no float data."
+                ]
+            )
+        }
+
+        let count = Int(outputBuffer.frameLength)
+        var pcm = Data(capacity: count * 2)
+        for index in 0..<count {
+            let scaled = max(
+                -1,
+                min(1, floats[0][index] * Config.speakingVolume)
+            )
+            var value = Int16(scaled * Float(Int16.max)).littleEndian
+            withUnsafeBytes(of: &value) {
+                pcm.append(contentsOf: $0)
+            }
+        }
+        return pcm
     }
 }

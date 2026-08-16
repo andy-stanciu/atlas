@@ -9,6 +9,15 @@ func writeTemporaryWAV(
             "voice-input-\(UUID().uuidString).wav"
         )
 
+    try writeWAV(pcm: pcm, sampleRate: sampleRate, to: url)
+    return url
+}
+
+func writeWAV(
+    pcm: Data,
+    sampleRate: Int,
+    to url: URL
+) throws {
     let channels: UInt16 = 1
     let bitsPerSample: UInt16 = 16
 
@@ -42,7 +51,6 @@ func writeTemporaryWAV(
     wav.append(pcm)
 
     try wav.write(to: url)
-    return url
 }
 
 private func appendLittleEndian<T: FixedWidthInteger>(

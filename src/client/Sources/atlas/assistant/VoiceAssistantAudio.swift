@@ -1,71 +1,40 @@
-import AVFoundation
 import Foundation
 import QuartzCore
 
 extension VoiceAssistant {
 
-    func configureAudioEngine() throws {
-        let input = engine.inputNode
-        let output = engine.outputNode
-
-        try input.setVoiceProcessingEnabled(true)
-        try output.setVoiceProcessingEnabled(true)
-
-        engine.attach(player)
-
-        engine.connect(
-            player,
-            to: engine.mainMixerNode,
-            format: voiceFormat
-        )
-
-        engine.connect(
-            engine.mainMixerNode,
-            to: output,
-            format: voiceFormat
-        )
-
-        let tapFormat = input.outputFormat(forBus: 0)
-
-        guard tapFormat.sampleRate > 0, tapFormat.channelCount > 0 else {
-            throw NSError(
-                domain: "Atlas",
-                code: 10,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "No valid microphone format: \(tapFormat)"
-                ]
-            )
-        }
-
-        recordingSampleRate = tapFormat.sampleRate
-        input.removeTap(onBus: 0)
-
-        input.installTap(
-            onBus: 0,
-            bufferSize: 1_024,
-            format: nil
-        ) { [weak self] buffer, _ in
-            self?.handleAudio(buffer)
-        }
-
-        engine.prepare()
-        try engine.start()
-    }
-
-    func handleAudio(_ buffer: AVAudioPCMBuffer) {
-        guard let channels = buffer.floatChannelData,
-            buffer.frameLength > 0
-        else {
+    func handleAudio(samples: UnsafePointer<Float>, count: Int) {
+        guard count > 0 else {
             return
         }
 
-        let samples = channels[0]
-        let count = Int(buffer.frameLength)
-
+        let rmsValue = rms(samples, count: count)
+        let peakValue = peak(samples, count: count)
         let voiced =
-            rms(samples, count: count) >= Config.speechThreshold
-            || peak(samples, count: count) >= Config.speechPeakThreshold
+            rmsValue >= Config.speechThreshold
+            || peakValue >= Config.speechPeakThreshold
+
+        if Config.debugAudioLevels {
+            micDebugFrames += 1
+            micDebugMaxRMS = max(micDebugMaxRMS, rmsValue)
+            micDebugMaxPeak = max(micDebugMaxPeak, peakValue)
+            if micDebugFrames >= 100 {
+                Log.system(
+                    String(
+                        format:
+                            "mic levels: max rms %.4f (thr %.3f), "
+                            + "max peak %.4f (thr %.3f)",
+                        Double(micDebugMaxRMS),
+                        Double(Config.speechThreshold),
+                        Double(micDebugMaxPeak),
+                        Double(Config.speechPeakThreshold)
+                    )
+                )
+                micDebugFrames = 0
+                micDebugMaxRMS = 0
+                micDebugMaxPeak = 0
+            }
+        }
 
         let pcm = floatToPCM16(samples, count: count)
 
@@ -175,7 +144,7 @@ extension VoiceAssistant {
                 }
 
                 self.cancelConversationTimeout()
-                self.player.stop()
+                self.satellite.interruptPlayback()
 
                 self.lock.withLock {
                     self.queuedAudioBuffers = 0
@@ -188,11 +157,42 @@ extension VoiceAssistant {
 
         if let completedRecording, let completedSampleRate {
             Task {
+                if Config.debugTurnRecording {
+                    let url = URL(
+                        fileURLWithPath:
+                            Config.debugTurnRecordingPath
+                            + "/atlas-turn-\(Int(Date().timeIntervalSince1970 * 1000)).wav"
+                    )
+                    try? writeWAV(
+                        pcm: completedRecording,
+                        sampleRate: Int(completedSampleRate),
+                        to: url
+                    )
+                }
                 await self.processTurn(
                     pcm: completedRecording,
                     sampleRate: completedSampleRate
                 )
             }
+        }
+    }
+
+    func handleSatelliteDisconnect() {
+        var wasRecording = false
+
+        lock.withLock {
+            wasRecording = state == .recording
+            state = .listening
+            recording = Data()
+            speechFrames = 0
+            silenceFrames = 0
+            clearPreRoll()
+            queuedAudioBuffers = 0
+            currentPlaybackPurpose = nil
+        }
+
+        if wasRecording {
+            cancelRecognizerSession()
         }
     }
 
@@ -225,7 +225,7 @@ extension VoiceAssistant {
     }
 
     func rms(
-        _ samples: UnsafeMutablePointer<Float>,
+        _ samples: UnsafePointer<Float>,
         count: Int
     ) -> Float {
         var sum: Float = 0
@@ -238,7 +238,7 @@ extension VoiceAssistant {
     }
 
     func peak(
-        _ samples: UnsafeMutablePointer<Float>,
+        _ samples: UnsafePointer<Float>,
         count: Int
     ) -> Float {
         var value: Float = 0
@@ -251,7 +251,7 @@ extension VoiceAssistant {
     }
 
     func floatToPCM16(
-        _ samples: UnsafeMutablePointer<Float>,
+        _ samples: UnsafePointer<Float>,
         count: Int
     ) -> Data {
         var data = Data(capacity: count * 2)

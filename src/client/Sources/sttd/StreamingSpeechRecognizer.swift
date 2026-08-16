@@ -2,11 +2,6 @@ import Foundation
 import OSLog
 @preconcurrency import WhisperKit
 
-struct StreamingTranscriptUpdate: Sendable, Equatable {
-    let text: String
-    let isFinal: Bool
-}
-
 enum StreamingSpeechRecognizerError: LocalizedError {
     case cancelled
     case emptyAudio
@@ -87,19 +82,8 @@ func resampleTo16kHz(
     return output
 }
 
-/// Rolling on-device speech recognizer for Atlas.
-///
-/// Design notes:
-/// - Does NOT use `AudioStreamTranscriber`; that type owns microphone
-///   capture and would conflict with Atlas's existing AVAudioEngine tap.
-/// - Follows the CLI's simulated-streaming pattern: repeatedly transcribe
-///   the full accumulated buffer while recording, then run one final pass
-///   at end-of-speech. Voice-assistant turns are short (typically < 15 s),
-///   so full-buffer retranscription is cheap enough and avoids any risk of
-///   dropping audio with seek heuristics.
-/// - The update loop self-throttles: a new partial pass is only started
-///   once wall-clock time exceeds the duration of the previous pass, so a
-///   slow device simply produces fewer partials.
+/// Rolling on-device speech recognizer for Atlas. Accumulates a turn of
+/// audio and transcribes it once, in full, at end-of-speech.
 actor StreamingSpeechRecognizer {
     private let logger = Logger(
         subsystem: "Atlas",
@@ -107,43 +91,20 @@ actor StreamingSpeechRecognizer {
     )
 
     private let whisperKit: WhisperKit
-    private let partialUpdate: (@Sendable (StreamingTranscriptUpdate) -> Void)?
-    private let updateIntervalSeconds: Double
-    private let minimumPartialSamples: Int
 
     private var audioSamples: [Float] = []
-    private var updateTask: Task<Void, Never>?
-    private var currentTranscribeTask: Task<String, Error>?
-    private var lastPassStartedAt = Date.distantPast
-    private var lastPassDuration: TimeInterval = 0
-    private var lastPassSampleCount = 0
-    private var latestText = ""
-    private var latestError: Error?
     private var sessionActive = false
     private var cancelled = false
     private var finalizing = false
 
-    init(
-        whisperKit: WhisperKit,
-        partialUpdate: (@Sendable (StreamingTranscriptUpdate) -> Void)? = nil,
-        updateIntervalSeconds: Double = 0.4,
-        minimumPartialSeconds: Double = 1.0
-    ) {
+    init(whisperKit: WhisperKit) {
         self.whisperKit = whisperKit
-        self.partialUpdate = partialUpdate
-        self.updateIntervalSeconds = updateIntervalSeconds
-        self.minimumPartialSamples = Int(
-            minimumPartialSeconds * Double(WhisperKit.sampleRate)
-        )
     }
 
     /// Creates a recognizer with a pre-loaded local model folder
     /// (e.g. the `large-v3-v20240930_626MB` folder already downloaded by
     /// argmax-cli). No download or remote config lookup is performed.
-    init(
-        modelFolder: String,
-        partialUpdate: (@Sendable (StreamingTranscriptUpdate) -> Void)? = nil
-    ) async throws {
+    init(modelFolder: String) async throws {
         let config = WhisperKitConfig(
             modelFolder: modelFolder,
             verbose: false,
@@ -156,10 +117,7 @@ actor StreamingSpeechRecognizer {
 
         let whisperKit = try await WhisperKit(config)
 
-        self.init(
-            whisperKit: whisperKit,
-            partialUpdate: partialUpdate
-        )
+        self.init(whisperKit: whisperKit)
     }
 
     var isActive: Bool {
@@ -167,42 +125,14 @@ actor StreamingSpeechRecognizer {
     }
 
     func begin() {
-        currentTranscribeTask?.cancel()
-        currentTranscribeTask = nil
-        updateTask?.cancel()
-        updateTask = nil
-
         sessionActive = true
         cancelled = false
         finalizing = false
         audioSamples.removeAll(keepingCapacity: true)
-        latestText = ""
-        latestError = nil
-        lastPassStartedAt = .distantPast
-        lastPassDuration = 0
-        lastPassSampleCount = 0
-
-        updateTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else {
-                    return
-                }
-
-                try? await Task.sleep(
-                    nanoseconds: UInt64(self.updateIntervalSeconds * 1_000_000_000)
-                )
-
-                guard !Task.isCancelled else {
-                    return
-                }
-
-                await self.transcribePartialIfDue()
-            }
-        }
     }
 
     /// Appends one chunk of microphone audio. Call with the same PCM16
-    /// data Atlas already records, plus the engine's sample rate.
+    /// data Atlas already records, plus the audio's sample rate.
     func appendPCM16(_ pcm: Data, sourceSampleRate: Int) {
         guard sessionActive, !finalizing, !cancelled else {
             return
@@ -217,30 +147,18 @@ actor StreamingSpeechRecognizer {
         audioSamples.append(contentsOf: resampled)
     }
 
-    /// Runs one final full-buffer transcription and returns the text.
-    /// Throws on cancellation or failure so callers can fall back to the
-    /// server-side Whisper path.
+    /// Runs the full-buffer transcription and returns the text.
     func finish() async throws -> String {
         guard sessionActive else {
-            return latestText
+            return ""
         }
 
         finalizing = true
-        updateTask?.cancel()
-        updateTask = nil
-
-        // Let any in-flight partial pass finish, then do the final pass.
-        if let inFlight = currentTranscribeTask {
-            _ = try? await inFlight.value
-            currentTranscribeTask = nil
-        }
 
         defer {
             sessionActive = false
             finalizing = false
             audioSamples.removeAll(keepingCapacity: false)
-            latestText = ""
-            latestError = nil
         }
 
         if cancelled {
@@ -252,9 +170,10 @@ actor StreamingSpeechRecognizer {
         }
 
         do {
-            let text = try await transcribe(
+            let text = try await Self.runTranscription(
+                whisperKit: whisperKit,
                 samples: audioSamples,
-                isFinal: true
+                logger: logger
             )
 
             if cancelled {
@@ -279,18 +198,7 @@ actor StreamingSpeechRecognizer {
         cancelled = true
         sessionActive = false
         finalizing = false
-        updateTask?.cancel()
-        updateTask = nil
-        currentTranscribeTask?.cancel()
-        currentTranscribeTask = nil
         audioSamples.removeAll(keepingCapacity: false)
-        latestText = ""
-        latestError = nil
-    }
-
-    /// Latest partial transcript, for wake-gating or display.
-    func currentTranscript() -> String {
-        latestText
     }
 
     func loadTimingsDescription() -> String {
@@ -300,95 +208,6 @@ actor StreamingSpeechRecognizer {
             encoder=\(t.encoderLoadTime)s decoder=\(t.decoderLoadTime)s \
             tokenizer=\(t.tokenizerLoadTime)s prewarm=\(t.prewarmLoadTime)s
             """
-    }
-
-    // MARK: - Private
-
-    private func transcribePartialIfDue() async {
-        guard sessionActive, !finalizing, !cancelled else {
-            return
-        }
-
-        guard currentTranscribeTask == nil else {
-            return
-        }
-
-        guard audioSamples.count >= minimumPartialSamples else {
-            return
-        }
-
-        // Don't start a new pass if we have no new audio since the last one.
-        guard audioSamples.count > lastPassSampleCount else {
-            return
-        }
-
-        // Adaptive throttle: only start a new pass once wall time has
-        // caught up with the previous pass duration.
-        guard
-            Date().timeIntervalSince(lastPassStartedAt) >= lastPassDuration
-        else {
-            return
-        }
-
-        lastPassStartedAt = Date()
-        lastPassSampleCount = audioSamples.count
-
-        let snapshot = audioSamples
-
-        let task = Task<String, Error> { [whisperKit, logger] in
-            try await Self.runTranscription(
-                whisperKit: whisperKit,
-                samples: snapshot,
-                logger: logger
-            )
-        }
-
-        currentTranscribeTask = task
-
-        do {
-            let text = try await task.value
-
-            guard !cancelled, sessionActive else {
-                return
-            }
-
-            lastPassDuration = Date().timeIntervalSince(lastPassStartedAt)
-            latestText = text
-            partialUpdate?(
-                StreamingTranscriptUpdate(text: text, isFinal: false)
-            )
-        } catch {
-            guard !cancelled, sessionActive else {
-                return
-            }
-
-            lastPassDuration = Date().timeIntervalSince(lastPassStartedAt)
-            latestError = error
-            logger.error(
-                "Partial transcription failed: \(error.localizedDescription, privacy: .public)"
-            )
-        }
-
-        currentTranscribeTask = nil
-    }
-
-    private func transcribe(
-        samples: [Float],
-        isFinal: Bool
-    ) async throws -> String {
-        let text = try await Self.runTranscription(
-            whisperKit: whisperKit,
-            samples: samples,
-            logger: logger
-        )
-
-        if isFinal {
-            partialUpdate?(
-                StreamingTranscriptUpdate(text: text, isFinal: true)
-            )
-        }
-
-        return text
     }
 
     private static func runTranscription(

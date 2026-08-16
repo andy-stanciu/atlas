@@ -33,13 +33,13 @@ extension VoiceAssistant {
             }
 
             guard !transcript.isEmpty else {
-                consoleTranscript.clear()
                 Log.blank()
                 Log.system("No speech recognized.")
                 transitionToListening()
                 return
             }
-            consoleTranscript.showFinal(transcript)
+
+            Log.transcript("You: \(transcript)")
 
             let active = lock.withLock { conversationActive }
             let mergedPrefix = lock.withLock { () -> String? in
@@ -63,7 +63,6 @@ extension VoiceAssistant {
 
             if !active {
                 guard isWakeGreeting(transcript) else {
-                    consoleTranscript.clear()
                     transitionToListening()
                     return
                 }
@@ -210,7 +209,6 @@ extension VoiceAssistant {
             activeTurnSpeaker = speakerIdentity
         }
 
-        consoleTranscript.clear()
         if playThinkingFiller {
             let filler = nextThinkingFiller()
 

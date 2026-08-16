@@ -3,8 +3,6 @@ import Foundation
 import QuartzCore
 
 final class VoiceAssistant {
-    let engine = AVAudioEngine()
-    let player = AVAudioPlayerNode()
     let lock = NSRecursiveLock()
 
     let ttsQueue = DispatchQueue(
@@ -28,18 +26,18 @@ final class VoiceAssistant {
     let toolServer = ToolServerClient()
     let speakerClient = SpeakerClient()
     let speakerEnrollment: SpeakerEnrollmentCoordinator
-    let consoleTranscript = ConsoleTranscript()
     var sttClient: STTClient?
     var recognizerFeedChain: Task<Void, Never> = Task {}
     var sttConnectTask: Task<Void, Never> = Task {}
 
+    var satellite: SatelliteLink!
+    var soundEffects: SoundEffects!
     var playback: AudioPlayback!
     var notificationCoordinator: NotificationCoordinator?
 
     var state: AssistantState = .listening
     var recording = Data()
-    var recordingSampleRate: Double = 48_000
-    let soundEffects = SoundEffects()
+    var recordingSampleRate: Double = 16_000
 
     var preRollBuffers = [Data]()
     var preRollBytes = 0
@@ -48,6 +46,11 @@ final class VoiceAssistant {
     var silenceFrames = 0
     var queuedAudioBuffers = 0
     var speakingStartedAt: CFTimeInterval = 0
+
+    // Debug metering; only touched on the satellite audio queue
+    var micDebugFrames = 0
+    var micDebugMaxRMS: Float = 0
+    var micDebugMaxPeak: Float = 0
 
     var conversationActive = false
     var conversationTimeoutWorkItem: DispatchWorkItem?
@@ -72,8 +75,19 @@ final class VoiceAssistant {
             ollama: ollama
         )
 
+        satellite = SatelliteLink(
+            port: UInt16(Config.satellitePort),
+            onAudio: { [weak self] samples, count in
+                self?.handleAudio(samples: samples, count: count)
+            },
+            onDisconnect: { [weak self] in
+                self?.handleSatelliteDisconnect()
+            }
+        )
+        soundEffects = SoundEffects(satellite: satellite)
+
         playback = AudioPlayback(
-            player: player,
+            satellite: satellite,
             kokoro: kokoro,
             queue: ttsQueue,
             voiceFormat: voiceFormat,
@@ -93,9 +107,6 @@ final class VoiceAssistant {
             let client = STTClient()
             do {
                 try await client.connect()
-                await client.setPartialTextHandler { [weak self] text in
-                    self?.handleLiveTranscript(text)
-                }
                 lock.withLock {
                     self?.sttClient = client
                 }
@@ -118,13 +129,14 @@ final class VoiceAssistant {
         Log.system("Connecting to speech recognition daemon...")
         await sttConnectTask.value
 
-        try configureAudioEngine()
+        try satellite.start()
         startNotificationCoordinator()
 
         Log.system(
             """
-            Voice-processing audio engine started.
-            Say “Hey Atlas” or “Hi Atlas” to begin. Press Ctrl-C to quit.
+            Satellite listener started on port \(Config.satellitePort).
+            Waiting for the satellite to connect. Press Ctrl-C to quit.
+
 
             """
         )

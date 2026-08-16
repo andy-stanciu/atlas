@@ -21,13 +21,8 @@ enum STTClientError: LocalizedError {
 actor STTClient {
     private var connection: STTFrameConnection?
     private var pendingReply: CheckedContinuation<(type: UInt8, payload: Data), Error>?
-    private var onPartialText: (@Sendable (String) -> Void)?
 
     init() {}
-
-    func setPartialTextHandler(_ handler: @escaping @Sendable (String) -> Void) {
-        onPartialText = handler
-    }
 
     func connect() async throws {
         let fd = try STTUnixSocket.connectClient(path: STTIPCConfig.socketPath)
@@ -120,12 +115,6 @@ actor STTClient {
     }
 
     private func handleIncoming(_ frame: (type: UInt8, payload: Data)) {
-        if frame.type == STTResponseType.partial.rawValue {
-            let text = String(data: frame.payload, encoding: .utf8) ?? ""
-            onPartialText?(text)
-            return
-        }
-
         guard let continuation = pendingReply else {
             return
         }
