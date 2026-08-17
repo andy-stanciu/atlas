@@ -35,7 +35,11 @@ final class VoiceAssistant {
     var playback: AudioPlayback!
     var notificationCoordinator: NotificationCoordinator?
 
-    var state: AssistantState = .listening
+    var state: AssistantState = .listening {
+        didSet {
+            updateLEDState()
+        }
+    }
     var recording = Data()
     var recordingSampleRate: Double = 16_000
 
@@ -52,7 +56,11 @@ final class VoiceAssistant {
     var micDebugMaxRMS: Float = 0
     var micDebugMaxPeak: Float = 0
 
-    var conversationActive = false
+    var conversationActive = false {
+        didSet {
+            updateLEDState()
+        }
+    }
     var conversationTimeoutWorkItem: DispatchWorkItem?
     var shouldEndConversationAfterSpeech = false
 
@@ -60,7 +68,11 @@ final class VoiceAssistant {
     var activeTurnText: String?
     var activeTurnSpeaker: SpeakerIdentity?
     var generationTask: Task<Void, Never>?
-    var currentPlaybackPurpose: PlaybackPurpose?
+    var currentPlaybackPurpose: PlaybackPurpose? {
+        didSet {
+            updateLEDState()
+        }
+    }
     var pendingMergedText: String?
     var lastThinkingFiller: String?
 
@@ -144,5 +156,23 @@ final class VoiceAssistant {
         lock.withLock {
             activeTurnID == turnID
         }
+    }
+    
+    func updateLEDState() {
+        let ledState: SatelliteLEDState = lock.withLock {
+            switch state {
+            case .listening:
+                return conversationActive ? .conversationOpen : .idle
+            case .recording:
+                return .recording
+            case .processing:
+                return .processing
+            case .speaking:
+                return currentPlaybackPurpose == .thinkingFiller
+                    ? .processing
+                    : .speaking
+            }
+        }
+        satellite?.setLEDState(ledState)
     }
 }

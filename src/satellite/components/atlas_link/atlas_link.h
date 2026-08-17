@@ -9,12 +9,15 @@
 #include "esphome/components/audio/audio.h"
 #include "esphome/components/microphone/microphone.h"
 #include "esphome/components/speaker/speaker.h"
+#include "esphome/components/switch/switch.h"
+#include "esphome/components/respeaker_xvf3800/respeaker_xvf3800.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include <fcntl.h>
+#include <math.h>
 #include <lwip/netdb.h>
 #include <lwip/sockets.h>
 #include <lwip/tcp.h>
@@ -40,11 +43,22 @@ namespace esphome
     enum ControlCmd : uint8_t
     {
       CTRL_FLUSH = 0x01,
-      CTRL_TTS_START = 0x02
+      CTRL_TTS_START = 0x02,
+      CTRL_SET_STATE = 0x03
     };
     enum EventCode : uint8_t
     {
       EV_FLUSHED = 0x01
+    };
+
+    // LED states, mirrored by SatelliteLEDState in the Atlas client.
+    enum LEDState : uint8_t
+    {
+      LED_IDLE = 0,
+      LED_RECORDING = 1,
+      LED_PROCESSING = 2,
+      LED_SPEAKING = 3,
+      LED_CONVO_OPEN = 4,
     };
 
     // Uplink: the forked i2s_audio mic delivers 16 kHz s32 stereo; we extract
@@ -56,10 +70,12 @@ namespace esphome
     // CTRL_FLUSH closes + stops speaker), so in-flight frames after a flush
     // cannot restart playback.
     // A full speaker ring means we are AHEAD of playback: drop rather than
-    // block. Blocking throttles the socket task, backs up TCP, and lets the
-    // device's playback position diverge from the sender's clock by seconds.
-    // Sends are bounded: if the peer stops reading, drop the connection and
-    // reconnect rather than wedging the audio paths on a dead socket.
+    // block. Sends are bounded: a dead peer costs a reconnect, not a wedge.
+    // LED ring is rendered locally at 25 Hz from the last received LED state;
+    // the speaking envelope is computed from playback samples as they pass.
+    // The spinner starts from the last beam direction so listening hands off
+    // to thinking without a positional jump. Breathing effects phase from the
+    // state-entry timestamp so transitions always start dark.
     static constexpr size_t FRAME_SAMPLES = 320;             // 20 ms @ 16 kHz
     static constexpr size_t FRAME_BYTES = FRAME_SAMPLES * 2; // s16le mono
     static constexpr UBaseType_t TXQ_LEN = 16;
@@ -87,6 +103,9 @@ namespace esphome
       void set_microphone(microphone::Microphone *mic) { mic_ = mic; }
       void set_speaker(speaker::Speaker *spk) { spk_ = spk; }
       void set_debug(bool debug) { debug_ = debug; }
+      void set_respeaker(respeaker_xvf3800::RespeakerXVF3800 *respeaker) { respeaker_ = respeaker; }
+      void set_mute_switch(switch_::Switch *mute_switch) { mute_switch_ = mute_switch; }
+      void set_beam_offset(int offset) { beam_offset_ = offset; }
 
       float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
@@ -139,10 +158,113 @@ namespace esphome
                      (unsigned long)esp_get_minimum_free_heap_size());
           }
         }
+        if (now - last_led_render_ > 40)
+        {
+          last_led_render_ = now;
+          render_leds_(now);
+        }
       }
 
     protected:
       static void task_fn_(void *arg) { static_cast<AtlasLink *>(arg)->run_(); }
+
+      static uint32_t rgb_(uint8_t r, uint8_t g, uint8_t b)
+      {
+        return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+      }
+
+      // One canonical green; everything green is this hue at some brightness.
+      static uint32_t green_(float brightness)
+      {
+        if (brightness < 0)
+          brightness = 0;
+        if (brightness > 1)
+          brightness = 1;
+        return rgb_(0, (uint8_t)(200 * brightness), 0);
+      }
+
+      void render_leds_(uint32_t now)
+      {
+        if (respeaker_ == nullptr)
+          return;
+        uint32_t colors[12] = {0};
+
+        if (mute_switch_ != nullptr && mute_switch_->state)
+        {
+          for (auto &c : colors)
+            c = rgb_(60, 0, 0);
+        }
+        else if (!connected_)
+        {
+          float phase = (now - led_state_changed_at_) / 600.0f;
+          float b = 0.5f - 0.5f * cosf(phase); // breathe starts from off
+          uint8_t v = (uint8_t)(140 * b);
+          for (auto &c : colors)
+            c = rgb_(v, 0, 0);
+        }
+        else
+        {
+          switch (led_state_)
+          {
+          case LED_IDLE:
+            break;
+          case LED_CONVO_OPEN:
+          {
+            float phase = (now - led_state_changed_at_) / 900.0f;
+            float b = 0.5f - 0.5f * cosf(phase); // starts from off
+            for (auto &c : colors)
+              c = green_(0.6f * b);
+            break;
+          }
+          case LED_RECORDING:
+          {
+            // Beam reads are I2C transactions with internal retries; 12 Hz is
+            // plenty for a 30-degree-resolution indicator.
+            if (now - last_beam_read_ > 80)
+            {
+              last_beam_read_ = now;
+              int raw = respeaker_->read_led_beam_direction();
+              if (raw >= 0 && raw <= 11)
+              {
+                last_beam_dir_ = (raw + beam_offset_ + 12) % 12;
+              }
+            }
+            int dir = last_beam_dir_;
+            if (dir < 0)
+            {
+              for (auto &c : colors)
+                c = green_(0.15f);
+            }
+            else
+            {
+              colors[dir] = green_(1.0f);
+              colors[(dir + 1) % 12] = colors[(dir + 11) % 12] = green_(0.4f);
+              colors[(dir + 2) % 12] = colors[(dir + 10) % 12] = green_(0.15f);
+            }
+            break;
+          }
+          case LED_PROCESSING:
+          {
+            uint32_t steps = (now - led_state_changed_at_) / 100;
+            int head = (int)((spinner_origin_ + steps) % 12);
+            colors[head] = green_(1.0f);
+            colors[(head + 11) % 12] = green_(0.4f);
+            colors[(head + 10) % 12] = green_(0.15f);
+            break;
+          }
+          case LED_SPEAKING:
+          {
+            float e = play_env_ / 0.25f;
+            if (e > 1.0f)
+              e = 1.0f;
+            for (auto &c : colors)
+              c = green_(0.15f + 0.85f * e);
+            break;
+          }
+          }
+        }
+        respeaker_->set_led_ring(colors);
+      }
 
       void run_()
       {
@@ -161,6 +283,7 @@ namespace esphome
           spk_->stop();
           close(sock_);
           sock_ = -1;
+          led_state_changed_at_ = millis(); // disconnected breathe starts from off
           ESP_LOGW(TAG, "disconnected");
           vTaskDelay(pdMS_TO_TICKS(500));
         }
@@ -328,10 +451,14 @@ namespace esphome
           // 24 kHz s16le mono -> 48 kHz s16le stereo, half-band polyphase FIR.
           // Output lags input by 8 samples (0.33 ms); register zeroed per burst.
           std::vector<int16_t> out(n * 4);
+          int32_t frame_peak = 0;
           for (size_t i = 0; i < n; i++)
           {
             int16_t cur;
             memcpy(&cur, payload + 2 * i, 2);
+            int32_t a = cur < 0 ? -(int32_t)cur : (int32_t)cur;
+            if (a > frame_peak)
+              frame_peak = a;
             memmove(&fir_hist_[0], &fir_hist_[1], 15 * sizeof(int16_t));
             fir_hist_[15] = cur;
             float acc = 0;
@@ -348,6 +475,9 @@ namespace esphome
             out[4 * i] = out[4 * i + 1] = even;
             out[4 * i + 2] = out[4 * i + 3] = (int16_t)mid;
           }
+          // Peak-follower envelope (~100 ms decay) for the speaking animation.
+          float env = frame_peak / 32768.0f;
+          play_env_ = env > play_env_ * 0.85f ? env : play_env_ * 0.85f;
           size_t expected = out.size() * sizeof(int16_t);
           const uint8_t *ptr = (const uint8_t *)out.data();
           size_t written = 0;
@@ -380,6 +510,7 @@ namespace esphome
           {
             tts_active_ = false;
             memset(fir_hist_, 0, sizeof(fir_hist_));
+            play_env_ = 0;
             spk_->stop();
             if (debug_)
               ESP_LOGI(TAG, "flush: speaker stopped");
@@ -390,8 +521,20 @@ namespace esphome
           {
             tts_active_ = true;
             memset(fir_hist_, 0, sizeof(fir_hist_));
+            play_env_ = 0;
             if (debug_)
               ESP_LOGI(TAG, "tts start");
+          }
+          else if (payload[0] == CTRL_SET_STATE && len >= 2)
+          {
+            led_state_ = payload[1];
+            led_state_changed_at_ = millis();
+            if (led_state_ == LED_PROCESSING)
+            {
+              spinner_origin_ = last_beam_dir_ >= 0 ? last_beam_dir_ : 0;
+            }
+            if (debug_)
+              ESP_LOGI(TAG, "led state %d", (int)led_state_);
           }
         }
       }
@@ -434,6 +577,9 @@ namespace esphome
       uint16_t port_{0};
       microphone::Microphone *mic_{nullptr};
       speaker::Speaker *spk_{nullptr};
+      respeaker_xvf3800::RespeakerXVF3800 *respeaker_{nullptr};
+      switch_::Switch *mute_switch_{nullptr};
+      int beam_offset_{0};
       int sock_{-1};
       TaskHandle_t task_{nullptr};
       QueueHandle_t txq_{nullptr};
@@ -445,6 +591,13 @@ namespace esphome
       uint8_t txacc_[FRAME_BYTES];
       size_t txfill_{0};
       int16_t fir_hist_[16] = {};
+      float play_env_{0};
+      uint8_t led_state_{LED_IDLE};
+      uint32_t last_led_render_{0};
+      uint32_t last_beam_read_{0};
+      int last_beam_dir_{-1};
+      uint32_t led_state_changed_at_{0};
+      int spinner_origin_{0};
       uint32_t txdrop_{0};
       uint32_t last_drop_log_{0};
       uint32_t last_stall_log_{0};

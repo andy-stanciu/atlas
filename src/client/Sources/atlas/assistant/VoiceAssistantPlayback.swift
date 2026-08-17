@@ -20,8 +20,8 @@ extension VoiceAssistant {
                 break
             }
 
-            state = .speaking
             currentPlaybackPurpose = purpose
+            state = .speaking
             speechFrames = 0
             silenceFrames = 0
             queuedAudioBuffers += 1
@@ -79,18 +79,15 @@ extension VoiceAssistant {
                 return
             }
 
-            currentPlaybackPurpose = nil
-
             if purpose == .thinkingFiller {
-                // Not .listening — the real reply hasn't started yet
-                // (generation may still be running). Staying in
-                // .processing keeps scheduled speech (reminders,
-                // announcements) from sneaking in during this gap.
                 state = .processing
+                currentPlaybackPurpose = nil
                 speechFrames = 0
                 silenceFrames = 0
                 return
             }
+
+            currentPlaybackPurpose = nil
 
             guard state == .speaking else {
                 return

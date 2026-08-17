@@ -2,6 +2,14 @@ import Accelerate
 import Foundation
 import Network
 
+enum SatelliteLEDState: UInt8 {
+    case idle = 0
+    case recording = 1
+    case processing = 2
+    case speaking = 3
+    case conversationOpen = 4
+}
+
 final class DebugMicTap {
     private let path: String
     private let maxBytes: Int
@@ -42,6 +50,7 @@ final class SatelliteLink: @unchecked Sendable {
     private enum Control: UInt8 {
         case flush = 0x01
         case ttsStart = 0x02
+        case setState = 0x03
     }
 
     private struct Burst {
@@ -74,6 +83,7 @@ final class SatelliteLink: @unchecked Sendable {
 
     private var debugMicTap: DebugMicTap?
     private var loggedFirstFrame = false
+    private var lastLEDState: SatelliteLEDState = .idle
 
     // Downlink debugging (queue-confined)
     private var outstandingBytes = 0
@@ -146,6 +156,23 @@ final class SatelliteLink: @unchecked Sendable {
         }
     }
 
+    func setLEDState(_ state: SatelliteLEDState) {
+        queue.async {
+            guard state != self.lastLEDState else {
+                return
+            }
+            self.lastLEDState = state
+            self.sendLEDState(state)
+        }
+    }
+
+    private func sendLEDState(_ state: SatelliteLEDState) {
+        guard connected else {
+            return
+        }
+        sendFrame(.control, Data([Control.setState.rawValue, state.rawValue]))
+    }
+
     private func accept(_ conn: NWConnection) {
         connection?.cancel()
         connection = conn
@@ -159,6 +186,7 @@ final class SatelliteLink: @unchecked Sendable {
             case .ready:
                 self.connected = true
                 Log.system("Satellite connected.")
+                self.sendLEDState(self.lastLEDState)
             case .failed(let error):
                 self.dropConnection(conn, reason: error.localizedDescription)
             case .cancelled:

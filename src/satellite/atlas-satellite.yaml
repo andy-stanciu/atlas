@@ -1,3 +1,6 @@
+substitutions:
+  beam_offset: "5"
+
 esphome:
   name: atlas-sat-1
   friendly_name: Atlas Satellite 1
@@ -126,8 +129,12 @@ respeaker_xvf3800:
     md5: 043a848f544ff2c7265ac19685daf5de
 
 atlas_link:
+  id: sat_link
   host: "192.168.1.76"
   port: 8765
   microphone_id: i2s_mics
   speaker_id: i2s_audio_speaker
+  respeaker_id: respeaker
+  mute_switch_id: mic_mute_switch
+  beam_offset: ${beam_offset}
   debug: true
