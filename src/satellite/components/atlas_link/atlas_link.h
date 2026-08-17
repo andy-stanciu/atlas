@@ -22,6 +22,7 @@
 #include <lwip/sockets.h>
 #include <lwip/tcp.h>
 
+#include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 
@@ -73,9 +74,13 @@ namespace esphome
     // block. Sends are bounded: a dead peer costs a reconnect, not a wedge.
     // LED ring is rendered locally at 25 Hz from the last received LED state;
     // the speaking envelope is computed from playback samples as they pass.
-    // The spinner starts from the last beam direction so listening hands off
-    // to thinking without a positional jump. Breathing effects phase from the
-    // state-entry timestamp so transitions always start dark.
+    // The beam direction is captured at recording START and frozen: the
+    // XVF3800's auto-select DoA wanders as speech decays into the endpointing
+    // tail, so a direction read at turn end is noise. The spinner inherits the
+    // frozen direction. Breathing effects phase from the state-entry timestamp
+    // so transitions always start dark.
+    // The FIR output buffer is allocated once and reused: per-frame heap churn
+    // fragments internal SRAM, which is shared with I2S DMA and lwIP pbufs.
     static constexpr size_t FRAME_SAMPLES = 320;             // 20 ms @ 16 kHz
     static constexpr size_t FRAME_BYTES = FRAME_SAMPLES * 2; // s16le mono
     static constexpr UBaseType_t TXQ_LEN = 16;
@@ -152,10 +157,14 @@ namespace esphome
           wifi_ap_record_t ap;
           if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
           {
-            ESP_LOGI(TAG, "link: rssi %d dBm, bssid %02x:%02x:%02x:%02x:%02x:%02x, heap %lu (min %lu)",
+            // Internal SRAM is the scarce pool (I2S DMA, WiFi, lwIP pbufs);
+            // PSRAM totals are irrelevant to the failures we chase here.
+            ESP_LOGI(TAG, "link: rssi %d dBm, bssid %02x:%02x:%02x:%02x:%02x:%02x, "
+                          "heap-int %lu (min %lu), dma-block %lu",
                      ap.rssi, ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4],
-                     ap.bssid[5], (unsigned long)esp_get_free_heap_size(),
-                     (unsigned long)esp_get_minimum_free_heap_size());
+                     ap.bssid[5], (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
           }
         }
         if (now - last_led_render_ > 40)
@@ -218,18 +227,10 @@ namespace esphome
           }
           case LED_RECORDING:
           {
-            // Beam reads are I2C transactions with internal retries; 12 Hz is
-            // plenty for a 30-degree-resolution indicator.
-            if (now - last_beam_read_ > 80)
-            {
-              last_beam_read_ = now;
-              int raw = respeaker_->read_led_beam_direction();
-              if (raw >= 0 && raw <= 11)
-              {
-                last_beam_dir_ = (raw + beam_offset_ + 12) % 12;
-              }
-            }
-            int dir = last_beam_dir_;
+            // The beam indicator shows the direction captured at recording
+            // start — the reading is most accurate when speech energy is high
+            // and drifts as the utterance tails off.
+            int dir = frozen_beam_dir_;
             if (dir < 0)
             {
               for (auto &c : colors)
@@ -264,6 +265,20 @@ namespace esphome
           }
         }
         respeaker_->set_led_ring(colors);
+      }
+
+      void capture_beam_()
+      {
+        int raw = respeaker_->read_led_beam_direction();
+        if (raw >= 0 && raw <= 11)
+        {
+          int dir = (raw + beam_offset_ + 12) % 12;
+          if (debug_ && dir != frozen_beam_dir_)
+          {
+            ESP_LOGI(TAG, "beam dir %d", dir);
+          }
+          frozen_beam_dir_ = dir;
+        }
       }
 
       void run_()
@@ -450,7 +465,9 @@ namespace esphome
             return;
           // 24 kHz s16le mono -> 48 kHz s16le stereo, half-band polyphase FIR.
           // Output lags input by 8 samples (0.33 ms); register zeroed per burst.
-          std::vector<int16_t> out(n * 4);
+          // outbuf_ is grow-once: per-frame heap churn fragments internal SRAM.
+          outbuf_.resize(n * 4);
+          int16_t *out = outbuf_.data();
           int32_t frame_peak = 0;
           for (size_t i = 0; i < n; i++)
           {
@@ -478,8 +495,8 @@ namespace esphome
           // Peak-follower envelope (~100 ms decay) for the speaking animation.
           float env = frame_peak / 32768.0f;
           play_env_ = env > play_env_ * 0.85f ? env : play_env_ * 0.85f;
-          size_t expected = out.size() * sizeof(int16_t);
-          const uint8_t *ptr = (const uint8_t *)out.data();
+          size_t expected = outbuf_.size() * sizeof(int16_t);
+          const uint8_t *ptr = (const uint8_t *)out;
           size_t written = 0;
           uint32_t t0 = millis();
           while (written < expected)
@@ -529,12 +546,28 @@ namespace esphome
           {
             led_state_ = payload[1];
             led_state_changed_at_ = millis();
-            if (led_state_ == LED_PROCESSING)
+            if (led_state_ == LED_RECORDING)
             {
-              spinner_origin_ = last_beam_dir_ >= 0 ? last_beam_dir_ : 0;
+              // Capture the beam once, at turn start, when the reading is
+              // trustworthy; frozen_beam_dir_ drives both the beam indicator
+              // and the spinner origin for the rest of the turn.
+              capture_beam_();
+            }
+            else if (led_state_ == LED_PROCESSING)
+            {
+              spinner_origin_ = frozen_beam_dir_ >= 0 ? frozen_beam_dir_ : 0;
             }
             if (debug_)
-              ESP_LOGI(TAG, "led state %d", (int)led_state_);
+            {
+              if (led_state_ == LED_PROCESSING)
+              {
+                ESP_LOGI(TAG, "led state %d (spinner origin %d)", (int)led_state_, spinner_origin_);
+              }
+              else
+              {
+                ESP_LOGI(TAG, "led state %d", (int)led_state_);
+              }
+            }
           }
         }
       }
@@ -591,11 +624,11 @@ namespace esphome
       uint8_t txacc_[FRAME_BYTES];
       size_t txfill_{0};
       int16_t fir_hist_[16] = {};
+      std::vector<int16_t> outbuf_;
       float play_env_{0};
       uint8_t led_state_{LED_IDLE};
       uint32_t last_led_render_{0};
-      uint32_t last_beam_read_{0};
-      int last_beam_dir_{-1};
+      int frozen_beam_dir_{-1};
       uint32_t led_state_changed_at_{0};
       int spinner_origin_{0};
       uint32_t txdrop_{0};
