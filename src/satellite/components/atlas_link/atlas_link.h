@@ -19,6 +19,9 @@
 #include <lwip/sockets.h>
 #include <lwip/tcp.h>
 
+#include "esp_system.h"
+#include "esp_wifi.h"
+
 namespace esphome
 {
   namespace atlas_link
@@ -46,8 +49,9 @@ namespace esphome
 
     // Uplink: the forked i2s_audio mic delivers 16 kHz s32 stereo; we extract
     // left-channel s16le. Downlink: 24 kHz s16le mono on the wire (halves the
-    // TCP load vs 48 k); the device upsamples 2x (Catmull-Rom cubic) to the
-    // 48 kHz stereo stream the I2S bus (and XVF3800 AEC reference) requires.
+    // TCP load vs 48 k, and matches Kokoro's native rate); the device upsamples
+    // 2x (half-band FIR, polyphase form) to the 48 kHz stereo stream the I2S
+    // bus (and XVF3800 AEC reference) requires.
     // TTS frames are dropped unless the gate is open (CTRL_TTS_START opens,
     // CTRL_FLUSH closes + stops speaker), so in-flight frames after a flush
     // cannot restart playback.
@@ -60,6 +64,17 @@ namespace esphome
     static constexpr size_t FRAME_BYTES = FRAME_SAMPLES * 2; // s16le mono
     static constexpr UBaseType_t TXQ_LEN = 16;
     static constexpr uint32_t SEND_TIMEOUT_MS = 2500;
+
+    static constexpr float kInterpTaps[8] = {
+        0.62527244f,
+        -0.18021552f,
+        0.08021558f,
+        -0.03583439f,
+        0.01420185f,
+        -0.00446061f,
+        0.00082065f,
+        0.00000000f,
+    };
 
     class AtlasLink : public Component
     {
@@ -111,6 +126,18 @@ namespace esphome
           if (txdrop_ > 0)
             ESP_LOGW(TAG, "dropped %lu tx frames (queue full)", (unsigned long)txdrop_);
           txdrop_ = 0;
+        }
+        if (debug_ && now - last_link_log_ > 5000)
+        {
+          last_link_log_ = now;
+          wifi_ap_record_t ap;
+          if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+          {
+            ESP_LOGI(TAG, "link: rssi %d dBm, bssid %02x:%02x:%02x:%02x:%02x:%02x, heap %lu (min %lu)",
+                     ap.rssi, ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4],
+                     ap.bssid[5], (unsigned long)esp_get_free_heap_size(),
+                     (unsigned long)esp_get_minimum_free_heap_size());
+          }
         }
       }
 
@@ -298,42 +325,28 @@ namespace esphome
           size_t n = len / 2;
           if (n == 0)
             return;
-          // 24 kHz s16le mono -> 48 kHz s16le stereo via 2x Catmull-Rom cubic.
-          // midpoint between samples i and i+1: (9*(x[i]+x[i+1]) - (x[i-1]+x[i+2])) / 16
-          auto at = [&](int64_t i) -> int32_t
-          {
-            int16_t s;
-            if (i < 0)
-              return tts_hist_[i + 2];
-            if (i >= (int64_t)n)
-              i = n - 1; // clamp at frame end
-            memcpy(&s, payload + 2 * i, 2);
-            return s;
-          };
+          // 24 kHz s16le mono -> 48 kHz s16le stereo, half-band polyphase FIR.
+          // Output lags input by 8 samples (0.33 ms); register zeroed per burst.
           std::vector<int16_t> out(n * 4);
           for (size_t i = 0; i < n; i++)
           {
-            int32_t p0 = at((int64_t)i - 1);
-            int32_t p1 = at(i);
-            int32_t p2 = at(i + 1);
-            int32_t p3 = at(i + 2);
-            int32_t mid = (9 * (p1 + p2) - (p0 + p3)) / 16;
+            int16_t cur;
+            memcpy(&cur, payload + 2 * i, 2);
+            memmove(&fir_hist_[0], &fir_hist_[1], 15 * sizeof(int16_t));
+            fir_hist_[15] = cur;
+            float acc = 0;
+            for (int k = 0; k < 8; k++)
+            {
+              acc += kInterpTaps[k] * ((float)fir_hist_[7 - k] + (float)fir_hist_[8 + k]);
+            }
+            int32_t mid = (int32_t)lrintf(acc);
             if (mid > 32767)
               mid = 32767;
             if (mid < -32768)
               mid = -32768;
-            out[4 * i] = out[4 * i + 1] = (int16_t)p1;
+            int16_t even = fir_hist_[7];
+            out[4 * i] = out[4 * i + 1] = even;
             out[4 * i + 2] = out[4 * i + 3] = (int16_t)mid;
-          }
-          if (n >= 2)
-          {
-            tts_hist_[0] = (int16_t)at(n - 2);
-            tts_hist_[1] = (int16_t)at(n - 1);
-          }
-          else
-          {
-            tts_hist_[0] = tts_hist_[1];
-            tts_hist_[1] = (int16_t)at(0);
           }
           size_t expected = out.size() * sizeof(int16_t);
           const uint8_t *ptr = (const uint8_t *)out.data();
@@ -366,7 +379,7 @@ namespace esphome
           if (payload[0] == CTRL_FLUSH)
           {
             tts_active_ = false;
-            tts_hist_[0] = tts_hist_[1] = 0;
+            memset(fir_hist_, 0, sizeof(fir_hist_));
             spk_->stop();
             if (debug_)
               ESP_LOGI(TAG, "flush: speaker stopped");
@@ -376,7 +389,7 @@ namespace esphome
           else if (payload[0] == CTRL_TTS_START)
           {
             tts_active_ = true;
-            tts_hist_[0] = tts_hist_[1] = 0;
+            memset(fir_hist_, 0, sizeof(fir_hist_));
             if (debug_)
               ESP_LOGI(TAG, "tts start");
           }
@@ -431,10 +444,11 @@ namespace esphome
       bool debug_{false};
       uint8_t txacc_[FRAME_BYTES];
       size_t txfill_{0};
-      int16_t tts_hist_[2] = {0, 0};
+      int16_t fir_hist_[16] = {};
       uint32_t txdrop_{0};
       uint32_t last_drop_log_{0};
       uint32_t last_stall_log_{0};
+      uint32_t last_link_log_{0};
       uint8_t rxscratch_[4096];
       uint32_t micFrames_{0};
       uint32_t rxTtsFrames_{0};

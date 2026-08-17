@@ -15,13 +15,18 @@ struct Config {
     static let satellitePort = 8765
     static let satelliteDownlinkSampleRate: Double = 24_000
 
+    // Debug logging
     static let debugAudioLevels = false
     static let debugMicRecording = false
     static let debugTurnRecording = false
+    static let debugDownlinkStats = false
+    static let printTimingDebug = false
+    static let printSpeakerDebug = true
+    static let printToolCallDebug = true
+
     static let debugMicRecordingPath = "/tmp/atlas-mic-debug.wav"
     static let debugMicRecordingSeconds = 60
-    static let debugTurnRecordingPath = "/tmp"
-    static let debugDownlinkStats = true
+    static let debugTurnRecordingPath: String = "/tmp"
 
     static let toolServerTimeout: TimeInterval = 5
     static let speakerIdentificationTimeout: TimeInterval = 2
@@ -31,9 +36,6 @@ struct Config {
     static let ollamaContextWindow = 8192
     static let ollamaDefaultTemperature = 0.2
     static let ollamaConversationalTemperature = 0.9
-    static let printTimingDebug = false
-    static let printSpeakerDebug = true
-    static let printToolCallDebug = true
 
     static let ollamaModel = "qwen3.5:9b"
     static let maxToolLoopSteps = 16
@@ -45,12 +47,12 @@ struct Config {
     static let ttsWorkerScript =
         "\(NSHomeDirectory())/workplace/atlas/src/client/kokoro_worker.py"
 
-    static let speechThreshold: Float = 0.015
-    static let speechPeakThreshold: Float = 0.06
-
-    static let startSpeechFrames = 2
+    // Audio interface settings
+    static let speechThreshold: Float = 0.025
+    static let speechPeakThreshold: Float = 0.08
+    static let startSpeechFrames = 4
     static let interruptSpeechFrames = 4
-    static let endSilenceFrames = 35
+    static let endSilenceFrames = 50
     static let minimumRecordingBytes = 2_000
     static let preRollMilliseconds = 500
 

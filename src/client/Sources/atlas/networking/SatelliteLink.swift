@@ -238,7 +238,7 @@ final class SatelliteLink: @unchecked Sendable {
 
         if !loggedFirstFrame {
             loggedFirstFrame = true
-            Log.system("First mic frame received (\(payload.count) bytes).")
+            Log.system("Mic streaming audio frames...")
         }
         debugMicTap?.append(payload)
 
@@ -304,6 +304,13 @@ final class SatelliteLink: @unchecked Sendable {
         }
         let offset = frameIndex * frameBytes
         if offset >= burst.pcm.count {
+            // Fire the completion after the device drains its ring, but start
+            // the next burst immediately — holding the margin here starved
+            // the device's 100 ms ring at every sentence boundary.
+            let sentFrames = burstSentFrames
+            let startedAt = burstStart
+            let maxOut = maxOutstandingBytes
+            let pcmCount = burst.pcm.count
             queue.asyncAfter(deadline: .now() + drainMargin) { [weak self] in
                 guard let self else {
                     return
@@ -312,26 +319,26 @@ final class SatelliteLink: @unchecked Sendable {
                     let elapsed =
                         Double(
                             DispatchTime.now().uptimeNanoseconds
-                                - self.burstStart.uptimeNanoseconds
+                                - startedAt.uptimeNanoseconds
                         ) / 1_000_000_000
                     let audioSeconds =
-                        Double(burst.pcm.count) / 2
+                        Double(pcmCount) / 2
                         / Config.satelliteDownlinkSampleRate
                     Log.system(
                         String(
                             format:
                                 "tts burst done: %d frames in %.2fs "
                                 + "(audio %.2fs), max outstanding %d B",
-                            self.burstSentFrames,
+                            sentFrames,
                             elapsed,
                             audioSeconds,
-                            self.maxOutstandingBytes
+                            maxOut
                         )
                     )
                 }
                 burst.completion(gen == self.generation && self.connected)
-                self.runSender()
             }
+            runSender()
             return
         }
         let end = min(offset + frameBytes, burst.pcm.count)

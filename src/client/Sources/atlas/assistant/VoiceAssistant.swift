@@ -135,9 +135,7 @@ final class VoiceAssistant {
         Log.system(
             """
             Satellite listener started on port \(Config.satellitePort).
-            Waiting for the satellite to connect. Press Ctrl-C to quit.
-
-
+            Waiting for the satellite to connect...
             """
         )
     }
