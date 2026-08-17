@@ -40,7 +40,7 @@ final class SoundEffects {
 
         let floatFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: 48_000,
+            sampleRate: Config.satelliteDownlinkSampleRate,
             channels: 1,
             interleaved: false
         )!

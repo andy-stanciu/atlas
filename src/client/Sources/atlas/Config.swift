@@ -13,6 +13,7 @@ struct Config {
     )!
 
     static let satellitePort = 8765
+    static let satelliteDownlinkSampleRate: Double = 24_000
 
     static let debugAudioLevels = false
     static let debugMicRecording = false
@@ -20,6 +21,7 @@ struct Config {
     static let debugMicRecordingPath = "/tmp/atlas-mic-debug.wav"
     static let debugMicRecordingSeconds = 60
     static let debugTurnRecordingPath = "/tmp"
+    static let debugDownlinkStats = true
 
     static let toolServerTimeout: TimeInterval = 5
     static let speakerIdentificationTimeout: TimeInterval = 2

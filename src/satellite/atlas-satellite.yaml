@@ -18,6 +18,8 @@ esp32:
       CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
       CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
       CONFIG_MBEDTLS_SSL_PROTO_TLS1_3: "y"
+      CONFIG_LWIP_TCP_WND_DEFAULT: "65535"
+      CONFIG_LWIP_TCP_SND_BUF_DEFAULT: "16384"
 
 psram:
   mode: octal
@@ -30,6 +32,8 @@ logger:
   hardware_uart: USB_SERIAL_JTAG
   logs:
     i2s_audio: WARN
+
+api:
 
 ota:
   - platform: esphome
@@ -126,3 +130,4 @@ atlas_link:
   port: 8765
   microphone_id: i2s_mics
   speaker_id: i2s_audio_speaker
+  debug: true

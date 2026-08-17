@@ -100,6 +100,7 @@ enum ReplyPostProcessor {
         return kept.joined(separator: " ")
     }
 
+    // TODO: update this function to be less anal about rejecting non-speakable characters
     private static func isSpeakable(_ text: String) -> Bool {
         for scalar in text.unicodeScalars {
             if scalar.isASCII {

@@ -75,8 +75,16 @@ final class SatelliteLink: @unchecked Sendable {
     private var debugMicTap: DebugMicTap?
     private var loggedFirstFrame = false
 
-    private let frameBytes = 1_920
-    private let paceInterval = DispatchTimeInterval.milliseconds(20)
+    // Downlink debugging (queue-confined)
+    private var outstandingBytes = 0
+    private var maxOutstandingBytes = 0
+    private var burstSentFrames = 0
+    private var burstTotalFrames = 0
+    private var burstStart = DispatchTime.now()
+
+    // 20 ms frames at the downlink wire rate (24 kHz s16le mono = 960 B)
+    private let frameBytes =
+        Int(Config.satelliteDownlinkSampleRate) / 50 * 2
     private let drainMargin = DispatchTimeInterval.milliseconds(150)
 
     init(
@@ -96,8 +104,17 @@ final class SatelliteLink: @unchecked Sendable {
                 maxSeconds: Config.debugMicRecordingSeconds
             )
         }
+        // noDelay: 20 ms-spaced ~1 KB frames are exactly what Nagle mishandles.
+        // Keepalive: a silently stalled peer must fail fast, not zombie for
+        // minutes while scheduled speech evaporates.
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.noDelay = true
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 5
+        tcpOptions.keepaliveCount = 3
+        tcpOptions.keepaliveInterval = 3
         let listener = try NWListener(
-            using: .tcp,
+            using: NWParameters(tls: nil, tcp: tcpOptions),
             on: NWEndpoint.Port(rawValue: port)!
         )
         listener.newConnectionHandler = { [weak self] conn in
@@ -260,24 +277,57 @@ final class SatelliteLink: @unchecked Sendable {
             runSender()
             return
         }
+        if Config.debugDownlinkStats {
+            burstSentFrames = 0
+            burstTotalFrames = (burst.pcm.count + frameBytes - 1) / frameBytes
+            burstStart = .now()
+            maxOutstandingBytes = 0
+            Log.system(
+                "tts burst start: \(burst.pcm.count) B, "
+                    + "\(burstTotalFrames) frames"
+            )
+        }
         sendControl(.ttsStart)
-        sendBurstFrames(burst, offset: 0, gen: gen)
+        sendBurstFrames(burst, frameIndex: 0, gen: gen, start: .now())
     }
 
     private func sendBurstFrames(
         _ burst: Burst,
-        offset: Int,
-        gen: Int
+        frameIndex: Int,
+        gen: Int,
+        start: DispatchTime
     ) {
         guard gen == generation, connected else {
             burst.completion(false)
             runSender()
             return
         }
+        let offset = frameIndex * frameBytes
         if offset >= burst.pcm.count {
             queue.asyncAfter(deadline: .now() + drainMargin) { [weak self] in
                 guard let self else {
                     return
+                }
+                if Config.debugDownlinkStats {
+                    let elapsed =
+                        Double(
+                            DispatchTime.now().uptimeNanoseconds
+                                - self.burstStart.uptimeNanoseconds
+                        ) / 1_000_000_000
+                    let audioSeconds =
+                        Double(burst.pcm.count) / 2
+                        / Config.satelliteDownlinkSampleRate
+                    Log.system(
+                        String(
+                            format:
+                                "tts burst done: %d frames in %.2fs "
+                                + "(audio %.2fs), max outstanding %d B",
+                            self.burstSentFrames,
+                            elapsed,
+                            audioSeconds,
+                            self.maxOutstandingBytes
+                        )
+                    )
                 }
                 burst.completion(gen == self.generation && self.connected)
                 self.runSender()
@@ -286,8 +336,39 @@ final class SatelliteLink: @unchecked Sendable {
         }
         let end = min(offset + frameBytes, burst.pcm.count)
         sendFrame(.tts, burst.pcm.subdata(in: offset..<end))
-        queue.asyncAfter(deadline: .now() + paceInterval) { [weak self] in
-            self?.sendBurstFrames(burst, offset: end, gen: gen)
+
+        if Config.debugDownlinkStats {
+            burstSentFrames += 1
+            if burstSentFrames % 100 == 0 {
+                let elapsed =
+                    Double(
+                        DispatchTime.now().uptimeNanoseconds
+                            - burstStart.uptimeNanoseconds
+                    ) / 1_000_000_000
+                Log.system(
+                    String(
+                        format:
+                            "tts burst: %d/%d frames in %.2fs, "
+                            + "outstanding %d B",
+                        burstSentFrames,
+                        burstTotalFrames,
+                        elapsed,
+                        outstandingBytes
+                    )
+                )
+            }
+        }
+
+        // Absolute deadlines: a late tick self-corrects instead of
+        // compounding into a systematically slow stream.
+        let deadline = start + .milliseconds((frameIndex + 1) * 20)
+        queue.asyncAfter(deadline: deadline) { [weak self] in
+            self?.sendBurstFrames(
+                burst,
+                frameIndex: frameIndex + 1,
+                gen: gen,
+                start: start
+            )
         }
     }
 
@@ -316,6 +397,19 @@ final class SatelliteLink: @unchecked Sendable {
         frame.append(UInt8((len >> 24) & 0xff))
         frame.append(type.rawValue)
         frame.append(payload)
-        conn.send(content: frame, completion: .contentProcessed { _ in })
+
+        if Config.debugDownlinkStats {
+            outstandingBytes += frame.count
+            maxOutstandingBytes = max(maxOutstandingBytes, outstandingBytes)
+            let sentCount = frame.count
+            conn.send(
+                content: frame,
+                completion: .contentProcessed {
+                    [weak self] _ in
+                    self?.outstandingBytes -= sentCount
+                })
+        } else {
+            conn.send(content: frame, completion: .contentProcessed { _ in })
+        }
     }
 }

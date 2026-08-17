@@ -45,14 +45,21 @@ namespace esphome
     };
 
     // Uplink: the forked i2s_audio mic delivers 16 kHz s32 stereo; we extract
-    // left-channel s16le. Downlink: 48 kHz s16le mono -> s16le stereo; the driver
-    // clocks the 16-bit stream into the configured 32-bit I2S slots.
+    // left-channel s16le. Downlink: 24 kHz s16le mono on the wire (halves the
+    // TCP load vs 48 k); the device upsamples 2x (Catmull-Rom cubic) to the
+    // 48 kHz stereo stream the I2S bus (and XVF3800 AEC reference) requires.
     // TTS frames are dropped unless the gate is open (CTRL_TTS_START opens,
     // CTRL_FLUSH closes + stops speaker), so in-flight frames after a flush
     // cannot restart playback.
+    // A full speaker ring means we are AHEAD of playback: drop rather than
+    // block. Blocking throttles the socket task, backs up TCP, and lets the
+    // device's playback position diverge from the sender's clock by seconds.
+    // Sends are bounded: if the peer stops reading, drop the connection and
+    // reconnect rather than wedging the audio paths on a dead socket.
     static constexpr size_t FRAME_SAMPLES = 320;             // 20 ms @ 16 kHz
     static constexpr size_t FRAME_BYTES = FRAME_SAMPLES * 2; // s16le mono
     static constexpr UBaseType_t TXQ_LEN = 16;
+    static constexpr uint32_t SEND_TIMEOUT_MS = 2500;
 
     class AtlasLink : public Component
     {
@@ -64,6 +71,7 @@ namespace esphome
       }
       void set_microphone(microphone::Microphone *mic) { mic_ = mic; }
       void set_speaker(speaker::Speaker *spk) { spk_ = spk; }
+      void set_debug(bool debug) { debug_ = debug; }
 
       float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
@@ -91,6 +99,12 @@ namespace esphome
           mic_running_ = false;
         }
         uint32_t now = millis();
+        if (connected_ && last_iter_ != 0 && now - last_iter_ > 2000 && now - last_stall_log_ > 5000)
+        {
+          last_stall_log_ = now;
+          ESP_LOGW(TAG, "socket task stalled for %lu ms (tts_active=%d)",
+                   (unsigned long)(now - last_iter_), tts_active_);
+        }
         if (now - last_drop_log_ > 5000)
         {
           last_drop_log_ = now;
@@ -137,7 +151,9 @@ namespace esphome
             return false;
           memcpy(&addr.sin_addr, he->h_addr, he->h_length);
         }
-        int s = socket(AF_INET, SOCK_STREAM, 0);
+        // Global scope qualifier: the `api` component pulls in ESPHome's socket
+        // component, whose esphome::socket namespace would otherwise shadow this.
+        int s = ::socket(AF_INET, SOCK_STREAM, 0);
         if (s < 0)
           return false;
         if (connect(s, (sockaddr *)&addr, sizeof(addr)) != 0)
@@ -147,6 +163,7 @@ namespace esphome
         }
         int one = 1;
         setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+        setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
         fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
         sock_ = s;
         return true;
@@ -159,20 +176,57 @@ namespace esphome
         rxbuf.reserve(65536);
         for (;;)
         {
+          last_iter_ = millis();
+          maybe_log_stats_();
           if (xQueueReceive(txq_, txbuf, pdMS_TO_TICKS(10)) == pdTRUE)
           {
+            micFrames_++;
             if (!send_frame_(FRAME_MIC, txbuf, FRAME_BYTES))
               return;
           }
-          int n = recv(sock_, rxscratch_, sizeof(rxscratch_), 0);
-          if (n == 0 || (n < 0 && errno != EAGAIN))
-            return;
-          if (n > 0)
+          // Drain everything available each tick; a single read per tick leaves
+          // the receive window closed most of the time and starves the downlink.
+          for (;;)
           {
-            rxbuf.insert(rxbuf.end(), rxscratch_, rxscratch_ + n);
-            parse_rx_(rxbuf);
+            int n = recv(sock_, rxscratch_, sizeof(rxscratch_), 0);
+            if (n > 0)
+            {
+              rxbuf.insert(rxbuf.end(), rxscratch_, rxscratch_ + n);
+              parse_rx_(rxbuf);
+            }
+            else if (n == 0)
+            {
+              return;
+            }
+            else if (errno != EAGAIN)
+            {
+              return;
+            }
+            else
+            {
+              break;
+            }
           }
         }
+      }
+
+      void maybe_log_stats_()
+      {
+        uint32_t now = millis();
+        if (now - statsStart_ < 2000)
+          return;
+        if (debug_ && (rxTtsFrames_ > 0 || rxTtsDropped_ > 0 || micFrames_ > 0))
+        {
+          ESP_LOGI(TAG,
+                   "stats: mic tx %lu, tts rx %lu (%lu B), dropped %lu, play blocked %lu ms (max %lu), partial %lu, playdrop %lu",
+                   (unsigned long)micFrames_, (unsigned long)rxTtsFrames_, (unsigned long)rxTtsBytes_,
+                   (unsigned long)rxTtsDropped_, (unsigned long)playBlockedMs_,
+                   (unsigned long)playMaxBlockMs_, (unsigned long)playPartial_,
+                   (unsigned long)playDrop_);
+        }
+        statsStart_ = now;
+        micFrames_ = rxTtsFrames_ = 0;
+        rxTtsBytes_ = rxTtsDropped_ = playBlockedMs_ = playMaxBlockMs_ = playPartial_ = playDrop_ = 0;
       }
 
       bool send_frame_(uint8_t type, const uint8_t *payload, uint32_t len)
@@ -186,6 +240,7 @@ namespace esphome
       bool send_all_(const uint8_t *data, size_t len)
       {
         size_t off = 0;
+        uint32_t t0 = millis();
         while (off < len)
         {
           ssize_t w = send(sock_, data + off, len - off, 0);
@@ -193,6 +248,11 @@ namespace esphome
           {
             if (errno == EAGAIN)
             {
+              if (millis() - t0 > SEND_TIMEOUT_MS)
+              {
+                ESP_LOGW(TAG, "send timed out; reconnecting");
+                return false;
+              }
               vTaskDelay(pdMS_TO_TICKS(2));
               continue;
             }
@@ -231,32 +291,107 @@ namespace esphome
         if (type == FRAME_TTS)
         {
           if (!tts_active_)
+          {
+            rxTtsDropped_++;
             return; // dropped: gate closed (prevents post-flush restart)
-          // 48 kHz s16le mono -> s16le stereo (duplicate channels)
-          size_t samples = len / 2;
-          std::vector<int16_t> out(samples * 2);
-          for (size_t i = 0; i < samples; i++)
+          }
+          size_t n = len / 2;
+          if (n == 0)
+            return;
+          // 24 kHz s16le mono -> 48 kHz s16le stereo via 2x Catmull-Rom cubic.
+          // midpoint between samples i and i+1: (9*(x[i]+x[i+1]) - (x[i-1]+x[i+2])) / 16
+          auto at = [&](int64_t i) -> int32_t
           {
             int16_t s;
+            if (i < 0)
+              return tts_hist_[i + 2];
+            if (i >= (int64_t)n)
+              i = n - 1; // clamp at frame end
             memcpy(&s, payload + 2 * i, 2);
-            out[2 * i] = out[2 * i + 1] = s;
+            return s;
+          };
+          std::vector<int16_t> out(n * 4);
+          for (size_t i = 0; i < n; i++)
+          {
+            int32_t p0 = at((int64_t)i - 1);
+            int32_t p1 = at(i);
+            int32_t p2 = at(i + 1);
+            int32_t p3 = at(i + 2);
+            int32_t mid = (9 * (p1 + p2) - (p0 + p3)) / 16;
+            if (mid > 32767)
+              mid = 32767;
+            if (mid < -32768)
+              mid = -32768;
+            out[4 * i] = out[4 * i + 1] = (int16_t)p1;
+            out[4 * i + 2] = out[4 * i + 3] = (int16_t)mid;
           }
-          spk_->play((const uint8_t *)out.data(), out.size() * sizeof(int16_t));
+          if (n >= 2)
+          {
+            tts_hist_[0] = (int16_t)at(n - 2);
+            tts_hist_[1] = (int16_t)at(n - 1);
+          }
+          else
+          {
+            tts_hist_[0] = tts_hist_[1];
+            tts_hist_[1] = (int16_t)at(0);
+          }
+          size_t expected = out.size() * sizeof(int16_t);
+          const uint8_t *ptr = (const uint8_t *)out.data();
+          size_t written = 0;
+          uint32_t t0 = millis();
+          while (written < expected)
+          {
+            size_t w = spk_->play(ptr + written, expected - written);
+            if (w == 0)
+            {
+              if (millis() - t0 > 5)
+              {
+                // Ring full: we are ahead of playback. Drop the rest of this
+                // frame rather than stall the socket task.
+                playDrop_++;
+                break;
+              }
+              vTaskDelay(pdMS_TO_TICKS(1));
+              continue;
+            }
+            written += w;
+          }
+          uint32_t blocked = millis() - t0;
+          if (blocked > 50)
+            ESP_LOGW(TAG, "play blocked %lu ms", (unsigned long)blocked);
+          note_tts_frame_(len, written, expected, blocked);
         }
         else if (type == FRAME_CTRL && len >= 1)
         {
           if (payload[0] == CTRL_FLUSH)
           {
             tts_active_ = false;
+            tts_hist_[0] = tts_hist_[1] = 0;
             spk_->stop();
+            if (debug_)
+              ESP_LOGI(TAG, "flush: speaker stopped");
             uint8_t ev = EV_FLUSHED;
             send_frame_(FRAME_EVENT, &ev, 1);
           }
           else if (payload[0] == CTRL_TTS_START)
           {
             tts_active_ = true;
+            tts_hist_[0] = tts_hist_[1] = 0;
+            if (debug_)
+              ESP_LOGI(TAG, "tts start");
           }
         }
+      }
+
+      void note_tts_frame_(uint32_t payload_len, size_t written, size_t expected, uint32_t blocked_ms)
+      {
+        rxTtsFrames_++;
+        rxTtsBytes_ += payload_len;
+        playBlockedMs_ += blocked_ms;
+        if (blocked_ms > playMaxBlockMs_)
+          playMaxBlockMs_ = blocked_ms;
+        if (written != expected)
+          playPartial_++;
       }
 
       void on_mic_data_(const std::vector<uint8_t> &data)
@@ -290,13 +425,26 @@ namespace esphome
       TaskHandle_t task_{nullptr};
       QueueHandle_t txq_{nullptr};
       volatile bool connected_{false};
+      volatile uint32_t last_iter_{0};
       bool mic_running_{false};
       bool tts_active_{false};
+      bool debug_{false};
       uint8_t txacc_[FRAME_BYTES];
       size_t txfill_{0};
+      int16_t tts_hist_[2] = {0, 0};
       uint32_t txdrop_{0};
       uint32_t last_drop_log_{0};
+      uint32_t last_stall_log_{0};
       uint8_t rxscratch_[4096];
+      uint32_t micFrames_{0};
+      uint32_t rxTtsFrames_{0};
+      uint32_t rxTtsBytes_{0};
+      uint32_t rxTtsDropped_{0};
+      uint32_t playBlockedMs_{0};
+      uint32_t playMaxBlockMs_{0};
+      uint32_t playPartial_{0};
+      uint32_t playDrop_{0};
+      uint32_t statsStart_{0};
     };
 
   } // namespace atlas_link

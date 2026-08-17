@@ -6,6 +6,7 @@ from esphome.components import microphone, speaker
 CONF_HOST = "host"
 CONF_MIC = "microphone_id"
 CONF_SPK = "speaker_id"
+CONF_DEBUG = "debug"
 
 DEPENDENCIES = ["microphone", "speaker"]
 
@@ -19,6 +20,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_PORT): cv.port,
         cv.Required(CONF_MIC): cv.use_id(microphone.Microphone),
         cv.Required(CONF_SPK): cv.use_id(speaker.Speaker),
+        cv.Optional(CONF_DEBUG, default=False): cv.boolean,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -29,3 +31,4 @@ async def to_code(config):
     cg.add(var.set_server(config[CONF_HOST], config[CONF_PORT]))
     cg.add(var.set_microphone(await cg.get_variable(config[CONF_MIC])))
     cg.add(var.set_speaker(await cg.get_variable(config[CONF_SPK])))
+    cg.add(var.set_debug(config[CONF_DEBUG]))

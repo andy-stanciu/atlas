@@ -16,7 +16,7 @@ final class VoiceAssistant {
 
     let voiceFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
-        sampleRate: 48_000,
+        sampleRate: Config.satelliteDownlinkSampleRate,
         channels: 1,
         interleaved: false
     )!
