@@ -163,10 +163,6 @@ final class SatelliteLink: @unchecked Sendable {
                 return
             }
             self.lastLEDState = state
-            Log.system(
-                "led -> \(state) @ "
-                    + String(format: "%.2f", CACurrentMediaTime())
-            )
             self.sendLEDState(state)
         }
     }
