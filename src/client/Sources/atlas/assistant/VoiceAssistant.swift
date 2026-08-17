@@ -73,6 +73,11 @@ final class VoiceAssistant {
             updateLEDState()
         }
     }
+    var processingTurnIsLive = false {
+        didSet {
+            updateLEDState()
+        }
+    }
     var pendingMergedText: String?
     var lastThinkingFiller: String?
 
@@ -157,7 +162,7 @@ final class VoiceAssistant {
             activeTurnID == turnID
         }
     }
-    
+
     func updateLEDState() {
         let ledState: SatelliteLEDState = lock.withLock {
             switch state {
@@ -166,7 +171,7 @@ final class VoiceAssistant {
             case .recording:
                 return .recording
             case .processing:
-                return .processing
+                return processingTurnIsLive ? .processing : .idle
             case .speaking:
                 return currentPlaybackPurpose == .thinkingFiller
                     ? .processing

@@ -58,6 +58,7 @@ extension VoiceAssistant {
 
             if speechFrames >= Config.startSpeechFrames {
                 state = .recording
+                processingTurnIsLive = false
                 recording = joinedPreRoll()
                 silenceFrames = 0
                 clearPreRoll()
@@ -183,6 +184,7 @@ extension VoiceAssistant {
         lock.withLock {
             wasRecording = state == .recording
             state = .listening
+            processingTurnIsLive = false
             recording = Data()
             speechFrames = 0
             silenceFrames = 0

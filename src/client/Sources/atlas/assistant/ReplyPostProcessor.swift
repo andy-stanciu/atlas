@@ -28,14 +28,25 @@ enum ReplyPostProcessor {
         "what can i do for",
     ]
 
-    /// Typographic punctuation and Latin accents that TTS handles
-    /// fine. Anything else non-ASCII (emoji, CJK, arrows, math
-    /// symbols) gets the sentence dropped.
+    /// Typographic punctuation, common symbols, and invisible format
+    /// characters that TTS handles fine. Anything else non-ASCII
+    /// (emoji, CJK, arrows, math symbols) gets the sentence dropped.
     private static let allowedNonASCII: Set<UInt32> = [
-        0x2018, 0x2019,  // ' '
-        0x201C, 0x201D,  // " "
-        0x2013, 0x2014,  // – —
-        0x2026,  // …
+        0x2011, 0x2012,  // non-breaking hyphen, figure dash
+        0x2013, 0x2014, 0x2015,  // – — ― (en dash, em dash, horizontal bar)
+        0x2018, 0x2019, 0x201A,  // ' ' ‚
+        0x201C, 0x201D, 0x201E,  // " " „
+        0x2020, 0x2021,  // † ‡
+        0x2022,  // • bullet
+        0x2026,  // … ellipsis
+        0x2030,  // ‰ per mille
+        0x2032, 0x2033,  // ′ ″ prime, double prime
+        0x2039, 0x203A,  // ‹ ›
+        0x20AC,  // € euro
+        0x2122,  // ™ trademark
+        0x200B,  // zero-width space
+        0x2060,  // word joiner
+        0xFEFF,  // zero-width no-break space (BOM)
     ]
 
     private static let ones = [
@@ -100,7 +111,6 @@ enum ReplyPostProcessor {
         return kept.joined(separator: " ")
     }
 
-    // TODO: update this function to be less anal about rejecting non-speakable characters
     private static func isSpeakable(_ text: String) -> Bool {
         for scalar in text.unicodeScalars {
             if scalar.isASCII {
@@ -108,10 +118,10 @@ enum ReplyPostProcessor {
                 guard (0x20...0x7E).contains(scalar.value) else {
                     return false
                 }
-            } else if (0xC0...0xFF).contains(scalar.value)
+            } else if (0xA0...0xFF).contains(scalar.value)
                 || (0x100...0x17F).contains(scalar.value)
             {
-                continue  // accented Latin (José, naïve)
+                continue
             } else if allowedNonASCII.contains(scalar.value) {
                 continue
             } else {

@@ -41,6 +41,7 @@ extension VoiceAssistant {
 
             Log.transcript("You: \(transcript)")
 
+            lock.withLock { processingTurnIsLive = true }
             let active = lock.withLock { conversationActive }
             let mergedPrefix = lock.withLock { () -> String? in
                 let value = pendingMergedText
