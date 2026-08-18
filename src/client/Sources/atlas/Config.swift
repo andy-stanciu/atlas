@@ -5,7 +5,8 @@ struct Config {
         "\(NSHomeDirectory())/workplace/atlas/argmax-oss-swift/Models/whisperkit-coreml/openai_whisper-large-v3-v20240930_626MB"
 
     static let ollamaURL = URL(
-        string: "http://127.0.0.1:11434/api/chat"
+        string: ProcessInfo.processInfo.environment["ATLAS_OLLAMA_URL"]
+            ?? "http://127.0.0.1:11434/api/chat"
     )!
 
     static let toolServerURL = URL(
@@ -52,7 +53,7 @@ struct Config {
     static let speechPeakThreshold: Float = 0.08
     static let startSpeechFrames = 4
     static let interruptSpeechFrames = 4
-    static let endSilenceFrames = 50
+    static let endSilenceFrames = 80
     static let minimumRecordingBytes = 2_000
     static let preRollMilliseconds = 500
 

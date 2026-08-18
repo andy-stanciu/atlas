@@ -120,6 +120,25 @@ struct OllamaRequest: Codable {
     let messages: [Message]
     let options: Options
     let tools: [ToolDefinition]
+    let keep_alive: Int
+
+    init(
+        model: String,
+        stream: Bool,
+        think: Bool,
+        messages: [Message],
+        options: Options,
+        tools: [ToolDefinition],
+        keepAlive: Int = -1
+    ) {
+        self.model = model
+        self.stream = stream
+        self.think = think
+        self.messages = messages
+        self.options = options
+        self.tools = tools
+        self.keep_alive = keepAlive
+    }
 
     struct Options: Codable {
         let num_ctx: Int

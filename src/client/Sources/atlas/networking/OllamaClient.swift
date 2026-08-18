@@ -12,7 +12,7 @@ final class OllamaClient: @unchecked Sendable {
             think: false,
             messages: messages,
             options: .init(
-                num_ctx: 8192,
+                num_ctx: Config.ollamaContextWindow,
                 temperature: temperature,
                 num_predict: 400
             ),
