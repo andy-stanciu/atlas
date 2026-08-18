@@ -53,8 +53,8 @@ final class SentenceAccumulator: @unchecked Sendable {
         for index in text.indices {
             let character = text[index]
             let next = text.index(after: index)
-            let followedByBreak =
-                next == text.endIndex || text[next].isWhitespace
+            let followedBySpace =
+                next < text.endIndex && text[next].isWhitespace
 
             let isDash =
                 character == "—" || character == "–"
@@ -66,7 +66,8 @@ final class SentenceAccumulator: @unchecked Sendable {
                 isDash || character == "," || character == ";"
                 || character == ":"
 
-            guard isHard || isSoft, followedByBreak || isDash else {
+            guard isHard || isSoft else { continue }
+            guard isDash || followedBySpace else {
                 continue
             }
 

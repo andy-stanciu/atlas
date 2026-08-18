@@ -29,14 +29,17 @@ extension VoiceAssistant {
         let engine = ConversationEngine(
             ollama: ollama,
             toolServer: toolServer,
-            onToolBatch: { [weak self] _ in
+            onToolBatch: { [weak self] calls in
                 guard let self else {
                     return
                 }
                 // A pass that calls tools: drop any unflushed preamble
                 // fragment so it never prepends the final answer.
                 accumulator.discardPending()
-                await self.playToolCue(for: turnID)
+                await self.playToolCue(
+                    for: calls.first?.function.name,
+                    turnID: turnID
+                )
             },
             onTextDelta: { delta in
                 for sentence in accumulator.append(delta) {

@@ -4,6 +4,8 @@ import Foundation
 final class SoundEffects {
     private let satellite: SatelliteLink
     private var cache: [String: Data] = [:]
+    private let lock = NSLock()
+    private var missing: Set<String> = []
 
     init(satellite: SatelliteLink) {
         self.satellite = satellite
@@ -14,16 +16,37 @@ final class SoundEffects {
                 cache["\(name).mp3"] = pcm
             } else {
                 Log.system("[sound effect missing] \(name).mp3")
+                missing.insert("\(name).mp3")
             }
         }
     }
 
-    func play(_ name: String, fileExtension: String = "mp3") {
-        guard let pcm = cache["\(name).\(fileExtension)"] else {
-            Log.system("[sound effect missing] \(name).\(fileExtension)")
-            return
+    /// Plays a sound effect, decoding and caching it on first use.
+    /// Tries "<name>.mp3" first, then "<name>.wav". Returns false if
+    /// neither exists, so callers can fall back to a generic cue.
+    @discardableResult
+    func play(_ name: String, fileExtension: String = "mp3") -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let pcm = cache["\(name).mp3"] ?? cache["\(name).wav"] {
+            satellite.enqueue(pcm: pcm) { _ in }
+            return true
         }
+        let pcm =
+            decode(name, fileExtension: fileExtension)
+            ?? (fileExtension == "mp3"
+                ? decode(name, fileExtension: "wav")
+                : nil)
+
+        guard let pcm else {
+            if missing.insert("\(name).\(fileExtension)").inserted {
+                Log.system("[sound effect missing] \(name)")
+            }
+            return false
+        }
+        cache["\(name).\(fileExtension)"] = pcm
         satellite.enqueue(pcm: pcm) { _ in }
+        return true
     }
 
     private func decode(_ name: String, fileExtension: String) -> Data? {

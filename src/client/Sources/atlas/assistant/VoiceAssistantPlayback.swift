@@ -133,11 +133,16 @@ extension VoiceAssistant {
     }
 
     func playToolCue(
-        for turnID: UUID
+        for toolName: String?,
+        turnID: UUID
     ) async {
         guard isCurrentTurn(turnID) else {
             return
         }
+        if let toolName, soundEffects.play("tool_\(toolName)") {
+            return
+        }
+        // fallback: play generic sfx
         soundEffects.play("tool_call")
     }
 
