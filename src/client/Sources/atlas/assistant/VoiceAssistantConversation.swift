@@ -118,72 +118,25 @@ extension VoiceAssistant {
         cancelRecognizerSession()
     }
 
+    private static var wakeNames: Set<String> { ["atlas", "alice"] }
+
     func isWakeGreeting(_ transcript: String) -> Bool {
-        let words = normalizedText(transcript)
+        normalizedText(transcript)
             .split(separator: " ")
-            .map(String.init)
-
-        guard !words.isEmpty else {
-            return false
-        }
-
-        let wakeNames: Set<String> = ["atlas", "alice"]
-        let greetings = Set(Config.wakeGreetings)
-
-        if wakeNames.contains(words[0]) {
-            return true
-        }
-
-        if words.count >= 2,
-            greetings.contains(words[0]),
-            wakeNames.contains(words[1])
-        {
-            return true
-        }
-
-        return words.count >= 3
-            && words[0] == "good"
-            && ["morning", "afternoon", "evening"].contains(words[1])
-            && wakeNames.contains(words[2])
+            .contains { Self.wakeNames.contains(String($0)) }
     }
 
     func textAfterWakeGreeting(_ transcript: String) -> String {
         let words = normalizedText(transcript)
             .split(separator: " ")
             .map(String.init)
-
-        guard !words.isEmpty else {
-            return ""
-        }
-
-        let wakeNames: Set<String> = ["atlas", "alice"]
-        let greetings = Set(Config.wakeGreetings)
-
-        var wakeNameIndex: Int?
-
-        if wakeNames.contains(words[0]) {
-            wakeNameIndex = 0
-        } else if words.count >= 2,
-            greetings.contains(words[0]),
-            wakeNames.contains(words[1])
-        {
-            wakeNameIndex = 1
-        } else if words.count >= 3,
-            words[0] == "good",
-            ["morning", "afternoon", "evening"].contains(words[1]),
-            wakeNames.contains(words[2])
-        {
-            wakeNameIndex = 2
-        }
-
-        guard let wakeNameIndex else {
+        guard let index = words.firstIndex(where: { Self.wakeNames.contains($0) }) else {
             return transcript
         }
-
-        return
-            words
-            .dropFirst(wakeNameIndex + 1)
-            .joined(separator: " ")
+        if index + 1 < words.count {
+            return words[index...].joined(separator: " ")
+        }
+        return words[...index].joined(separator: " ")
     }
 
     func normalizedText(_ text: String) -> String {

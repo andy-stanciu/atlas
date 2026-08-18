@@ -81,6 +81,13 @@ extension VoiceAssistant {
                 silenceFrames += 1
             }
 
+            if !conversationActive,
+                recording.count
+                    >= Int(recordingSampleRate * Config.idleRotationSeconds) * 2
+            {
+                rotateIdleRecognizerSession()
+            }
+
             if silenceFrames >= Config.endSilenceFrames {
                 if recording.count >= Config.minimumRecordingBytes {
                     completedRecording = recording

@@ -21,8 +21,8 @@ struct Config {
     static let debugMicRecording = false
     static let debugTurnRecording = false
     static let debugDownlinkStats = false
-    static let printTimingDebug = false
-    static let printSpeakerDebug = true
+    static let printTimingDebug = true
+    static let printSpeakerDebug = false
     static let printToolCallDebug = true
 
     static let debugMicRecordingPath = "/tmp/atlas-mic-debug.wav"
@@ -61,18 +61,12 @@ struct Config {
     static let conversationTimeoutSeconds: TimeInterval = 7.0
     static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
 
+    static let idleRotationSeconds: Double = 10
+    static let idleRotationCarryoverMilliseconds = 2000
+
     static let speakerReinforceThreshold = 0.60
     static let speakerReinforceMinimumDurationSeconds = 3.0
     static let speakerEnrollmentMinimumClipSeconds = 3.0
-
-    static let wakeGreetings = [
-        "hey",
-        "hi",
-        "hello",
-        "good morning",
-        "good afternoon",
-        "good evening",
-    ]
 
     static let maxHistoryMessages = 10
 

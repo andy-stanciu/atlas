@@ -2,7 +2,6 @@ import Foundation
 import QuartzCore
 
 extension VoiceAssistant {
-
     func processTurn(
         pcm: Data,
         sampleRate: Double
@@ -39,143 +38,9 @@ extension VoiceAssistant {
                 return
             }
 
-            Log.transcript("You: \(transcript)")
-
-            lock.withLock { processingTurnIsLive = true }
-            let active = lock.withLock { conversationActive }
-            let mergedPrefix = lock.withLock { () -> String? in
-                let value = pendingMergedText
-                pendingMergedText = nil
-                return value
-            }
-
-            var userText = transcript
-
-            if let mergedPrefix, !mergedPrefix.isEmpty {
-                userText = "\(mergedPrefix) \(transcript)"
-            }
-
-            let startedNewConversation = !active
-            let wakeRemainder = textAfterWakeGreeting(transcript)
-            let wakeOnly =
-                startedNewConversation
-                && isWakeGreeting(transcript)
-                && normalizedText(wakeRemainder).isEmpty
-
-            if !active {
-                guard isWakeGreeting(transcript) else {
-                    transitionToListening()
-                    return
-                }
-
-                beginConversation()
-
-                userText = wakeRemainder
-
-                if normalizedText(userText).isEmpty {
-                    userText = "Hello"
-                }
-            } else {
-                cancelConversationTimeout()
-            }
-
-            let speakerResponse: SpeakerIdentificationResponse?
-            do {
-                speakerResponse = try await timed("Speaker ID") {
-                    try await speakerClient.identify(wavURL)
-                }
-            } catch {
-                Log.speaker("identify request failed: \(error.localizedDescription)")
-                speakerResponse = nil
-            }
-
-            let speakerIdentity = speakerResponse?.identity
-
-            if let speakerIdentity {
-                Log.speaker(
-                    "known: \(speakerIdentity.displayName) "
-                        + "(similarity=\(String(format: "%.3f", speakerIdentity.similarity)))"
-                )
-            } else if let speakerResponse {
-                Log.speaker(
-                    "status=\(speakerResponse.status.rawValue) "
-                        + "similarity="
-                        + "\(speakerResponse.similarity.map { String(format: "%.3f", $0) } ?? "n/a") "
-                        + "duration="
-                        + "\(speakerResponse.durationSeconds.map { String(format: "%.2f", $0) } ?? "n/a")s"
-                )
-            } else {
-                Log.speaker("identify unavailable this turn")
-            }
-
-            if speakerEnrollment.isAwaitingName {
-                let instruction = await speakerEnrollment.resolveNameResponse(
-                    userText: userText
-                )
-
-                beginGenerationTurn(
-                    userText: userText,
-                    speakerIdentity: speakerIdentity,
-                    speakerInstruction: instruction,
-                    playThinkingFiller: false
-                )
-
-                return
-            }
-
-            async let nameRequestPending = speakerEnrollment.processTurnResult(
-                speakerResponse: speakerResponse,
+            try await processRecognizedTurn(
+                transcript: transcript,
                 wavURL: wavURL
-            )
-            let activeReminder = await notificationCoordinator?
-                .acknowledgementEligibleReminderSnapshot()
-            let evaluation = ConversationClosing.evaluate(
-                userText: userText,
-                normalizedText: normalizedText
-            )
-            let closing = evaluation.result
-            let shouldRequestName = await nameRequestPending
-            var acknowledgedReminder = false
-            if closing != .none, activeReminder != nil {
-                acknowledgedReminder =
-                    await notificationCoordinator?.acknowledgeActiveReminder() ?? false
-            }
-            if closing == .closeNow, !acknowledgedReminder {
-                try await closeConversation(speaker: speakerIdentity)
-                return
-            }
-            var onCompletion: (@Sendable () async -> Void)?
-            var speakerInstruction = speakerIdentity.flatMap {
-                self.speakerContextInstruction(for: $0)
-            }
-            if closing != .none {
-                let closingInstruction =
-                    acknowledgedReminder
-                    ? SystemPrompts.conversationClosingWithReminderInstruction
-                    : SystemPrompts.conversationClosingInstruction
-
-                speakerInstruction = [
-                    speakerInstruction,
-                    closingInstruction,
-                ]
-                .compactMap { $0 }
-                .joined(separator: "\n\n")
-
-                onCompletion = { [weak self] in
-                    self?.scheduleConversationEndAfterSpeech()
-                }
-            } else if shouldRequestName || speakerEnrollment.hasPendingNameRequest {
-                onCompletion = { [weak self] in
-                    await self?.speakNameRequestFollowUp()
-                }
-            }
-            let generationText = evaluation.requestRemainder ?? userText
-            beginGenerationTurn(
-                userText: generationText,
-                speakerIdentity: speakerIdentity,
-                speakerInstruction: speakerInstruction,
-                playThinkingFiller: Config.lowLatencyMode ? false : !wakeOnly,
-                onCompletion: onCompletion
             )
         } catch {
             let nsError = error as NSError
@@ -192,6 +57,197 @@ extension VoiceAssistant {
                 """
             )
 
+            transitionToListening()
+        }
+    }
+
+    func processRecognizedTurn(
+        transcript: String,
+        wavURL: URL
+    ) async throws {
+        Log.transcript("You: \(transcript)")
+
+        lock.withLock { processingTurnIsLive = true }
+        let active = lock.withLock { conversationActive }
+        let mergedPrefix = lock.withLock { () -> String? in
+            let value = pendingMergedText
+            pendingMergedText = nil
+            return value
+        }
+
+        var userText = transcript
+
+        if let mergedPrefix, !mergedPrefix.isEmpty {
+            userText = "\(mergedPrefix) \(transcript)"
+        }
+
+        let startedNewConversation = !active
+        let wakeRemainder = textAfterWakeGreeting(transcript)
+        let wakeOnly =
+            startedNewConversation
+            && isWakeGreeting(transcript)
+            && normalizedText(wakeRemainder).isEmpty
+
+        if !active {
+            guard isWakeGreeting(transcript) else {
+                transitionToListening()
+                return
+            }
+
+            beginConversation()
+
+            userText = wakeRemainder
+
+            if normalizedText(userText).isEmpty {
+                userText = "Hello"
+            }
+        } else {
+            cancelConversationTimeout()
+        }
+
+        let speakerResponse: SpeakerIdentificationResponse?
+        do {
+            speakerResponse = try await timed("Speaker ID") {
+                try await speakerClient.identify(wavURL)
+            }
+        } catch {
+            Log.speaker("identify request failed: \(error.localizedDescription)")
+            speakerResponse = nil
+        }
+
+        let speakerIdentity = speakerResponse?.identity
+
+        if let speakerIdentity {
+            Log.speaker(
+                "known: \(speakerIdentity.displayName) "
+                    + "(similarity=\(String(format: "%.3f", speakerIdentity.similarity)))"
+            )
+        } else if let speakerResponse {
+            Log.speaker(
+                "status=\(speakerResponse.status.rawValue) "
+                    + "similarity="
+                    + "\(speakerResponse.similarity.map { String(format: "%.3f", $0) } ?? "n/a") "
+                    + "duration="
+                    + "\(speakerResponse.durationSeconds.map { String(format: "%.2f", $0) } ?? "n/a")s"
+            )
+        } else {
+            Log.speaker("identify unavailable this turn")
+        }
+
+        if speakerEnrollment.isAwaitingName {
+            let instruction = await speakerEnrollment.resolveNameResponse(
+                userText: userText
+            )
+
+            beginGenerationTurn(
+                userText: userText,
+                speakerIdentity: speakerIdentity,
+                speakerInstruction: instruction,
+                playThinkingFiller: false
+            )
+
+            return
+        }
+
+        async let nameRequestPending = speakerEnrollment.processTurnResult(
+            speakerResponse: speakerResponse,
+            wavURL: wavURL
+        )
+        let activeReminder = await notificationCoordinator?
+            .acknowledgementEligibleReminderSnapshot()
+        let evaluation = ConversationClosing.evaluate(
+            userText: userText,
+            normalizedText: normalizedText
+        )
+        let closing = evaluation.result
+        let shouldRequestName = await nameRequestPending
+        var acknowledgedReminder = false
+        if closing != .none, activeReminder != nil {
+            acknowledgedReminder =
+                await notificationCoordinator?.acknowledgeActiveReminder() ?? false
+        }
+        if closing == .closeNow, !acknowledgedReminder {
+            try await closeConversation(speaker: speakerIdentity)
+            return
+        }
+        var onCompletion: (@Sendable () async -> Void)?
+        var speakerInstruction = speakerIdentity.flatMap {
+            self.speakerContextInstruction(for: $0)
+        }
+        if closing != .none {
+            let closingInstruction =
+                acknowledgedReminder
+                ? SystemPrompts.conversationClosingWithReminderInstruction
+                : SystemPrompts.conversationClosingInstruction
+
+            speakerInstruction = [
+                speakerInstruction,
+                closingInstruction,
+            ]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
+
+            onCompletion = { [weak self] in
+                self?.scheduleConversationEndAfterSpeech()
+            }
+        } else if shouldRequestName || speakerEnrollment.hasPendingNameRequest {
+            onCompletion = { [weak self] in
+                await self?.speakNameRequestFollowUp()
+            }
+        }
+        let generationText = evaluation.requestRemainder ?? userText
+        beginGenerationTurn(
+            userText: generationText,
+            speakerIdentity: speakerIdentity,
+            speakerInstruction: speakerInstruction,
+            playThinkingFiller: Config.lowLatencyMode ? false : !wakeOnly,
+            onCompletion: onCompletion
+        )
+    }
+
+    func processRotatedTurn(
+        pcm: Data,
+        sampleRate: Double,
+        transcript: String
+    ) async {
+        let active = lock.withLock { conversationActive }
+        guard !active, isWakeGreeting(transcript) else {
+            return
+        }
+
+        do {
+            let wavURL = try writeTemporaryWAV(
+                pcm: pcm,
+                sampleRate: Int(sampleRate.rounded())
+            )
+            defer {
+                try? FileManager.default.removeItem(at: wavURL)
+            }
+
+            let claimed = lock.withLock { () -> Bool in
+                guard state == .recording else {
+                    return false
+                }
+                state = .processing
+                recording = Data()
+                speechFrames = 0
+                silenceFrames = 0
+                clearPreRoll()
+                return true
+            }
+            guard claimed else {
+                return
+            }
+            cancelRecognizerSession()
+
+            try await processRecognizedTurn(
+                transcript: transcript,
+                wavURL: wavURL
+            )
+        } catch {
+            Log.system(
+                "[pipeline error] \(error.localizedDescription)"
+            )
             transitionToListening()
         }
     }
