@@ -287,10 +287,7 @@ extension VoiceAssistant {
         let task = Task { [weak self] in
             guard let self else { return }
             defer { self.finishGeneration(for: turnID) }
-
-            let startedAt = CACurrentMediaTime()
             var printedAnyText = false
-
             do {
                 let fullReply = try await self.streamOllama(
                     userText,
@@ -348,10 +345,6 @@ extension VoiceAssistant {
                         )
                     }
                 }
-
-                let elapsed = CACurrentMediaTime() - startedAt
-                Log.timing("LLM stream complete: \(String(format: "%.3f", elapsed))s")
-
                 if let onCompletion {
                     await onCompletion()
                 }

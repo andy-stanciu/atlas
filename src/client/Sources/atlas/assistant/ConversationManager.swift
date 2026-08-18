@@ -1,7 +1,6 @@
-import Foundation
-
-final class SentenceAccumulator {
+final class SentenceAccumulator: @unchecked Sendable {
     private var pending = ""
+    private let softFlushMinimumCharacters = 60
 
     func append(_ text: String) -> [String] {
         pending += text
@@ -44,27 +43,55 @@ final class SentenceAccumulator {
         return final.isEmpty ? nil : final
     }
 
+    func discardPending() {
+        pending = ""
+    }
+
     private func findSentenceBoundary(
         in text: String
     ) -> Range<String.Index>? {
         for index in text.indices {
             let character = text[index]
+            let next = text.index(after: index)
+            let followedByBreak =
+                next == text.endIndex || text[next].isWhitespace
 
-            guard character == "."
-                || character == "!"
-                || character == "?"
-            else {
+            let isDash =
+                character == "—" || character == "–"
+                || (character == "-" && isSpacedHyphen(index, in: text))
+            let isHard =
+                character == "." || character == "!"
+                || character == "?" || character == "…"
+            let isSoft =
+                isDash || character == "," || character == ";"
+                || character == ":"
+
+            guard isHard || isSoft, followedByBreak || isDash else {
                 continue
             }
 
-            let next = text.index(after: index)
-
-            if next == text.endIndex || text[next].isWhitespace {
-                return index..<next
+            if !isHard {
+                let length = text.distance(from: text.startIndex, to: index)
+                guard length >= softFlushMinimumCharacters else {
+                    continue
+                }
             }
+
+            return index..<next
         }
 
         return nil
+    }
+
+    private func isSpacedHyphen(
+        _ index: String.Index,
+        in text: String
+    ) -> Bool {
+        guard index > text.startIndex else { return false }
+        let after = text.index(after: index)
+        guard after < text.endIndex else { return false }
+        return text[text.index(before: index)].isWhitespace
+            && text[after].isWhitespace
     }
 
     private func bestSplitIndex(

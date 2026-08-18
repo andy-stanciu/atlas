@@ -84,6 +84,82 @@ final class OllamaClient: @unchecked Sendable {
         return message
     }
 
+    func chatStream(
+        messages: [Message],
+        tools: [ToolDefinition],
+        temperature: Double = Config.ollamaDefaultTemperature,
+        onDelta: (String) -> Void
+    ) async throws -> Message {
+        let payload = OllamaRequest(
+            model: Config.ollamaModel,
+            stream: true,
+            think: false,
+            messages: messages,
+            options: .init(
+                num_ctx: Config.ollamaContextWindow,
+                temperature: temperature,
+                num_predict: 400
+            ),
+            tools: tools
+        )
+
+        var request = URLRequest(url: Config.ollamaURL)
+        request.httpMethod = "POST"
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+        guard let http = response as? HTTPURLResponse,
+            (200...299).contains(http.statusCode)
+        else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            Log.system("Ollama stream request failed. HTTP \(statusCode).")
+            throw NSError(
+                domain: "Ollama",
+                code: 2,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Ollama stream request failed with HTTP \(statusCode)."
+                ]
+            )
+        }
+
+        let decoder = JSONDecoder()
+        var content = ""
+        var toolCalls: [ToolCall]?
+
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard !line.isEmpty, let data = line.data(using: .utf8) else {
+                continue
+            }
+            guard
+                let chunk = try? decoder.decode(
+                    OllamaStreamChunk.self,
+                    from: data
+                )
+            else {
+                continue
+            }
+            if let delta = chunk.message?.content, !delta.isEmpty {
+                content += delta
+                onDelta(delta)
+            }
+            if let calls = chunk.message?.toolCalls, !calls.isEmpty {
+                toolCalls = calls
+            }
+            if chunk.done == true {
+                break
+            }
+        }
+
+        return Message(role: "assistant", content: content, toolCalls: toolCalls)
+    }
+
     func generateScheduledSpeech(
         text: String,
         kind: SpeechKind,

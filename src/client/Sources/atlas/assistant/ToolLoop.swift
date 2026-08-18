@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 
 extension VoiceAssistant {
     func streamOllama(
@@ -12,6 +13,19 @@ extension VoiceAssistant {
 
         let snapshot = lock.withLock { history }
 
+        let accumulator = SentenceAccumulator()
+
+        // Sentences flush to speech as they complete, in order, without
+        // blocking the LLM stream on TTS synthesis.
+        var sentenceChain: Task<Void, Never> = Task {}
+        func enqueueSentence(_ sentence: String) {
+            let previous = sentenceChain
+            sentenceChain = Task {
+                await previous.value
+                try? await onSentence(sentence)
+            }
+        }
+
         let engine = ConversationEngine(
             ollama: ollama,
             toolServer: toolServer,
@@ -19,15 +33,31 @@ extension VoiceAssistant {
                 guard let self else {
                     return
                 }
+                // A pass that calls tools: drop any unflushed preamble
+                // fragment so it never prepends the final answer.
+                accumulator.discardPending()
                 await self.playToolCue(for: turnID)
+            },
+            onTextDelta: { delta in
+                for sentence in accumulator.append(delta) {
+                    enqueueSentence(sentence)
+                }
             }
         )
 
+        let generationStart = CACurrentMediaTime()
         let result = try await engine.respond(
             to: userText,
             history: snapshot,
             activeReminderText: activeReminder?.text,
             speakerInstruction: speakerInstruction
+        )
+        Log.timing(
+            "LLM complete: "
+                + String(
+                    format: "%.3f",
+                    CACurrentMediaTime() - generationStart
+                ) + "s"
         )
 
         try Task.checkCancellation()
@@ -39,17 +69,13 @@ extension VoiceAssistant {
                 .markReminderAcknowledged()
         }
 
-        let accumulator = SentenceAccumulator()
-
-        for sentence in accumulator.append(result.reply) {
-            try Task.checkCancellation()
-            try await onSentence(sentence)
-        }
-
         if let remaining = accumulator.finish() {
-            try Task.checkCancellation()
-            try await onSentence(remaining)
+            enqueueSentence(remaining)
         }
+
+        try Task.checkCancellation()
+
+        await sentenceChain.value
 
         try Task.checkCancellation()
 
@@ -58,7 +84,7 @@ extension VoiceAssistant {
                 return
             }
 
-            // Update history with the final messages from the conversation result, 
+            // Update history with the final messages from the conversation result,
             // filtering out any messages that contain speaker identity information.
             history = result.finalMessages.filter {
                 !$0.content.contains("Speaker identity for this request is")

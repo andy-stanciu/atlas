@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 
 struct ConversationResult: Sendable {
     let reply: String
@@ -48,6 +49,7 @@ final class ConversationEngine: @unchecked Sendable {
     private let systemPrompt: String
     private let normalize: (String) -> String
     private let onToolBatch: @Sendable ([ToolCall]) async -> Void
+    private let onTextDelta: (String) -> Void
 
     init(
         ollama: any OllamaServing,
@@ -77,7 +79,9 @@ final class ConversationEngine: @unchecked Sendable {
                 .trimmingCharacters(
                     in: .whitespacesAndNewlines
                 )
-        }, onToolBatch: @escaping @Sendable ([ToolCall]) async -> Void = { _ in }
+        },
+        onToolBatch: @escaping @Sendable ([ToolCall]) async -> Void = { _ in },
+        onTextDelta: @escaping (String) -> Void = { _ in }
     ) {
         self.ollama = ollama
         self.toolServer = toolServer
@@ -85,6 +89,7 @@ final class ConversationEngine: @unchecked Sendable {
         self.systemPrompt = systemPrompt
         self.normalize = normalize
         self.onToolBatch = onToolBatch
+        self.onTextDelta = onTextDelta
     }
 
     func respond(
@@ -140,9 +145,24 @@ final class ConversationEngine: @unchecked Sendable {
 
         for step in 0..<maxSteps {
             try Task.checkCancellation()
-            let assistantMessage = try await ollama.chat(
+            let passStart = CACurrentMediaTime()
+            var firstTokenLogged = false
+            let assistantMessage = try await ollama.chatStream(
                 messages: messages,
-                tools: tools
+                tools: tools,
+                onDelta: { delta in
+                    if !firstTokenLogged {
+                        firstTokenLogged = true
+                        Log.timing(
+                            "LLM prefill: "
+                                + String(
+                                    format: "%.3f",
+                                    CACurrentMediaTime() - passStart
+                                ) + "s"
+                        )
+                    }
+                    onTextDelta(delta)
+                }
             )
 
             let calls = assistantMessage.toolCalls ?? []

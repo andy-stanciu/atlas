@@ -5,6 +5,26 @@ protocol OllamaServing: Sendable {
         messages: [Message],
         tools: [ToolDefinition],
     ) async throws -> Message
+
+    func chatStream(
+        messages: [Message],
+        tools: [ToolDefinition],
+        onDelta: (String) -> Void
+    ) async throws -> Message
+}
+
+extension OllamaServing {
+    func chatStream(
+        messages: [Message],
+        tools: [ToolDefinition],
+        onDelta: (String) -> Void
+    ) async throws -> Message {
+        let message = try await chat(messages: messages, tools: tools)
+        if !message.content.isEmpty {
+            onDelta(message.content)
+        }
+        return message
+    }
 }
 
 protocol ToolServing: Sendable {
@@ -21,6 +41,19 @@ extension OllamaClient: OllamaServing {
             messages: messages,
             tools: tools,
             temperature: Config.ollamaDefaultTemperature
+        )
+    }
+
+    func chatStream(
+        messages: [Message],
+        tools: [ToolDefinition],
+        onDelta: (String) -> Void
+    ) async throws -> Message {
+        try await chatStream(
+            messages: messages,
+            tools: tools,
+            temperature: Config.ollamaDefaultTemperature,
+            onDelta: onDelta
         )
     }
 }
