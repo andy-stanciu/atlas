@@ -174,7 +174,7 @@ extension VoiceAssistant {
                 userText: generationText,
                 speakerIdentity: speakerIdentity,
                 speakerInstruction: speakerInstruction,
-                playThinkingFiller: !wakeOnly,
+                playThinkingFiller: Config.lowLatencyMode ? false : !wakeOnly,
                 onCompletion: onCompletion
             )
         } catch {

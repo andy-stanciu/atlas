@@ -40,6 +40,7 @@ struct Config {
 
     static let ollamaModel = "qwen3.5:9b"
     static let maxToolLoopSteps = 16
+    static let lowLatencyMode = true
 
     static let pythonExecutable =
         ProcessInfo.processInfo.environment["PYTHON_EXECUTABLE"]
@@ -57,8 +58,8 @@ struct Config {
     static let minimumRecordingBytes = 2_000
     static let preRollMilliseconds = 500
 
-    static let conversationTimeoutSeconds: TimeInterval = 10
-    static let interruptGracePeriodSeconds: CFTimeInterval = 2.0
+    static let conversationTimeoutSeconds: TimeInterval = 7.0
+    static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
 
     static let speakerReinforceThreshold = 0.60
     static let speakerReinforceMinimumDurationSeconds = 3.0
