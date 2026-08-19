@@ -7,7 +7,7 @@ enum RegressionTests {
         )
 
         let engine = ConversationEngine(
-            ollama: OllamaClient(),
+            llm: LLMClient(),
             toolServer: toolServer
         )
 
@@ -18,7 +18,7 @@ enum RegressionTests {
         print(
             """
             Atlas regression suite
-            Model: \(Config.ollamaModel)
+            Model: \(Config.llmModel)
             Cases: \(cases.count)
             """
         )

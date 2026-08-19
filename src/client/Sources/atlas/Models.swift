@@ -4,27 +4,42 @@ struct Message: Codable, Sendable {
     let role: String
     let content: String
     let toolCalls: [ToolCall]?
+    let toolCallID: String?
 
     enum CodingKeys: String, CodingKey {
         case role
         case content
         case toolCalls = "tool_calls"
+        case toolCallID = "tool_call_id"
     }
 
     init(
         role: String,
         content: String,
-        toolCalls: [ToolCall]? = nil
+        toolCalls: [ToolCall]? = nil,
+        toolCallID: String? = nil
     ) {
         self.role = role
         self.content = content
         self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
     }
 }
 
 struct ToolCall: Codable, Sendable {
+    let id: String?
     let type: String?
     let function: ToolFunctionCall
+
+    init(
+        id: String? = nil,
+        type: String? = "function",
+        function: ToolFunctionCall
+    ) {
+        self.id = id
+        self.type = type
+        self.function = function
+    }
 }
 
 struct ToolFunctionCall: Codable, Sendable {
@@ -111,45 +126,6 @@ struct ToolListResponse: Codable, Sendable {
 struct ToolExecutionRequest: Codable {
     let name: String
     let arguments: [String: JSONValue]
-}
-
-struct OllamaRequest: Codable {
-    let model: String
-    let stream: Bool
-    let think: Bool
-    let messages: [Message]
-    let options: Options
-    let tools: [ToolDefinition]
-    let keep_alive: Int
-
-    init(
-        model: String,
-        stream: Bool,
-        think: Bool,
-        messages: [Message],
-        options: Options,
-        tools: [ToolDefinition],
-        keepAlive: Int = -1
-    ) {
-        self.model = model
-        self.stream = stream
-        self.think = think
-        self.messages = messages
-        self.options = options
-        self.tools = tools
-        self.keep_alive = keepAlive
-    }
-
-    struct Options: Codable {
-        let num_ctx: Int
-        let temperature: Double
-        let num_predict: Int
-    }
-}
-
-struct OllamaStreamChunk: Codable {
-    let message: Message?
-    let done: Bool?
 }
 
 struct WhisperResponse: Codable {

@@ -2,7 +2,7 @@ import Foundation
 
 final class SpeakerEnrollmentCoordinator {
     private let speakerClient: SpeakerClient
-    private let ollama: OllamaClient
+    private let llm: LLMClient
 
     private var anonymousProfileID: Int?
     private var latestUnknownSpeakerWAV: URL?
@@ -16,9 +16,9 @@ final class SpeakerEnrollmentCoordinator {
         nameRequestPending && !isAwaitingName
     }
 
-    init(speakerClient: SpeakerClient, ollama: OllamaClient) {
+    init(speakerClient: SpeakerClient, llm: LLMClient) {
         self.speakerClient = speakerClient
-        self.ollama = ollama
+        self.llm = llm
     }
 
     func processTurnResult(
@@ -102,7 +102,7 @@ final class SpeakerEnrollmentCoordinator {
         isAwaitingName = false
         nameRequestTask = nil
 
-        let extractedName = try? await ollama.extractSpeakerName(from: userText)
+        let extractedName = try? await llm.extractSpeakerName(from: userText)
 
         if let extractedName, let profileID = anonymousProfileID {
             Task { [speakerClient] in
@@ -132,8 +132,8 @@ final class SpeakerEnrollmentCoordinator {
             return
         }
         nameRequestPending = true
-        nameRequestTask = Task { [ollama] in
-            let generated = try? await ollama.generateSpeakerNameRequest()
+        nameRequestTask = Task { [llm] in
+            let generated = try? await llm.generateSpeakerNameRequest()
             guard let generated, !generated.isEmpty else {
                 return nil
             }

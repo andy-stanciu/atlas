@@ -444,7 +444,7 @@ extension VoiceAssistant {
             for: speaker
         )
 
-        let farewell = try await ollama.generateFarewell(
+        let farewell = try await llm.generateFarewell(
             speakerInstruction: farewellInstruction
         )
 

@@ -4,9 +4,9 @@ struct Config {
     static let whisperKitModelFolder =
         "\(NSHomeDirectory())/workplace/atlas/argmax-oss-swift/Models/whisperkit-coreml/openai_whisper-large-v3-v20240930_626MB"
 
-    static let ollamaURL = URL(
-        string: ProcessInfo.processInfo.environment["ATLAS_OLLAMA_URL"]
-            ?? "http://127.0.0.1:11434/api/chat"
+    static let llmURL = URL(
+        string: ProcessInfo.processInfo.environment["ATLAS_LLM_URL"]
+            ?? "http://192.168.1.232:8000/v1"
     )!
 
     static let toolServerURL = URL(
@@ -34,11 +34,12 @@ struct Config {
     static let speechPollIntervalSeconds: TimeInterval = 2
     static let reminderRepeatIntervalSeconds: TimeInterval = 30
     static let reminderMaxAnnouncements = 20
-    static let ollamaContextWindow = 8192
-    static let ollamaDefaultTemperature = 0.2
-    static let ollamaConversationalTemperature = 0.9
 
-    static let ollamaModel = "qwen3.5:9b"
+    // LLM / tool config
+    static let llmModel = "qwen3.5:9b"
+    static let llmDefaultTemperature = 0.2
+    static let llmConversationalTemperature = 0.9
+    static let llmMaxTokens = 400
     static let maxToolLoopSteps = 16
     static let lowLatencyMode = true
 

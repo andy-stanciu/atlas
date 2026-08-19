@@ -22,7 +22,7 @@ final class VoiceAssistant {
     )!
 
     let kokoro: KokoroWorker
-    let ollama = OllamaClient()
+    let llm = LLMClient()
     let toolServer = ToolServerClient()
     let speakerClient = SpeakerClient()
     let speakerEnrollment: SpeakerEnrollmentCoordinator
@@ -89,7 +89,7 @@ final class VoiceAssistant {
         kokoro = try KokoroWorker()
         speakerEnrollment = SpeakerEnrollmentCoordinator(
             speakerClient: speakerClient,
-            ollama: ollama
+            llm: llm
         )
 
         satellite = SatelliteLink(

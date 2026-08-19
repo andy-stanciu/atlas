@@ -159,7 +159,7 @@ extension VoiceAssistant {
                     return .notStarted
                 }
 
-                let spokenText = try await self.ollama.generateScheduledSpeech(
+                let spokenText = try await self.llm.generateScheduledSpeech(
                     text: speech.text,
                     kind: speech.kind,
                     announcementNumber: number,

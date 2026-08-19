@@ -27,7 +27,7 @@ extension VoiceAssistant {
         }
 
         let engine = ConversationEngine(
-            ollama: ollama,
+            llm: llm,
             toolServer: toolServer,
             onToolBatch: { [weak self] calls in
                 guard let self else {

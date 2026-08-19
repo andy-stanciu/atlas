@@ -3,27 +3,31 @@
 set -euo pipefail
 
 ROOT="$HOME/workplace/atlas"
-PC_BASE="http://192.168.1.232:11434"
 WHISPER="$ROOT/argmax-oss-swift/Models/whisperkit-coreml/openai_whisper-large-v3-v20240930_626MB"
 
 mode="${1:-}"
 [[ "$mode" == "local" || "$mode" == "pc" ]] || { echo "usage: $(basename "$0") local|pc" >&2; exit 1; }
 
-if [[ "$mode" == "pc" ]] && ! curl -sf --max-time 3 "$PC_BASE/api/version" >/dev/null; then
-  echo "warning: ollama not reachable at $PC_BASE - is atlas-ollama running on the PC?" >&2
+if [[ "$mode" == "pc" ]]; then
+  LLM_BASE="http://192.168.1.232:8000"
+else
+  LLM_BASE="http://127.0.0.1:8000"
 fi
 
-cmds=()
-if [[ "$mode" == "local" ]]; then
-  cmds+=("ollama serve")
+
+if ! curl -sf --max-time 3 "$LLM_BASE/v1/models" >/dev/null; then
+  if [[ "$mode" == "pc" ]]; then
+    echo "warning: vllm not reachable at $LLM_BASE - check 'sudo systemctl status vllm' on the PC" >&2
+  else
+    echo "warning: vllm not reachable at $LLM_BASE - start a local server first" >&2
+  fi
 fi
+
+
+cmds=()
 cmds+=("cd $ROOT/src/tool-server && uv run python app.py")
 cmds+=("cd $ROOT/src/client && swift build && swift run sttd $WHISPER")
-if [[ "$mode" == "pc" ]]; then
-  cmds+=("cd $ROOT/src/client && swift build && ATLAS_OLLAMA_URL=$PC_BASE/api/chat swift run atlas")
-else
-  cmds+=("cd $ROOT/src/client && swift build && swift run atlas")
-fi
+cmds+=("cd $ROOT/src/client && swift build && ATLAS_LLM_URL=$LLM_BASE/v1 swift run atlas")
 
 code "$ROOT"
 sleep 6

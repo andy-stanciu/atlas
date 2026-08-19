@@ -43,7 +43,7 @@ enum ConversationEngineError: LocalizedError, Equatable {
 }
 
 final class ConversationEngine: @unchecked Sendable {
-    private let ollama: any OllamaServing
+    private let llm: any LLMServing
     private let toolServer: any ToolServing
     private let maxSteps: Int
     private let systemPrompt: String
@@ -52,7 +52,7 @@ final class ConversationEngine: @unchecked Sendable {
     private let onTextDelta: (String) -> Void
 
     init(
-        ollama: any OllamaServing,
+        llm: any LLMServing,
         toolServer: any ToolServing,
         maxSteps: Int = Config.maxToolLoopSteps,
         systemPrompt: String = SystemPrompts.mainSystemPrompt,
@@ -83,7 +83,7 @@ final class ConversationEngine: @unchecked Sendable {
         onToolBatch: @escaping @Sendable ([ToolCall]) async -> Void = { _ in },
         onTextDelta: @escaping (String) -> Void = { _ in }
     ) {
-        self.ollama = ollama
+        self.llm = llm
         self.toolServer = toolServer
         self.maxSteps = maxSteps
         self.systemPrompt = systemPrompt
@@ -101,38 +101,42 @@ final class ConversationEngine: @unchecked Sendable {
         speakerInstruction: String? = nil
     ) async throws -> ConversationResult {
         var messages = history
+        var durableMessages = history
+        var transientInstructions = [String]()
 
         if let speakerInstruction {
-            messages.append(
-                Message(
-                    role: "system",
-                    content: speakerInstruction
-                )
-            )
+            transientInstructions.append(speakerInstruction)
         }
 
         if let activeReminderText {
-            messages.append(
-                Message(
-                    role: "system",
-                    content: SystemPrompts.activeReminderResponseInstruction
-                )
+            transientInstructions.append(
+                SystemPrompts.activeReminderResponseInstruction
             )
-
-            messages.append(
-                Message(
-                    role: "system",
-                    content: """
-                        Active reminder text:
-                        \(activeReminderText)
-                        """
-                )
+            transientInstructions.append(
+                """
+                Active reminder text:
+                \(activeReminderText)
+                """
             )
         }
 
-        messages.append(
-            Message(role: "user", content: userText)
-        )
+        if !transientInstructions.isEmpty {
+            let systemPrefixCount = messages.prefix {
+                $0.role == "system"
+            }.count
+
+            messages.insert(
+                Message(
+                    role: "system",
+                    content: transientInstructions.joined(separator: "\n\n")
+                ),
+                at: systemPrefixCount
+            )
+        }
+
+        let userMessage = Message(role: "user", content: userText)
+        messages.append(userMessage)
+        durableMessages.append(userMessage)
 
         let tools = try await toolServer.availableTools()
 
@@ -147,7 +151,7 @@ final class ConversationEngine: @unchecked Sendable {
             try Task.checkCancellation()
             let passStart = CACurrentMediaTime()
             var firstTokenLogged = false
-            let assistantMessage = try await ollama.chatStream(
+            let assistantMessage = try await llm.chatStream(
                 messages: messages,
                 tools: tools,
                 onDelta: { delta in
@@ -167,13 +171,13 @@ final class ConversationEngine: @unchecked Sendable {
 
             let calls = assistantMessage.toolCalls ?? []
 
-            messages.append(
-                Message(
-                    role: "assistant",
-                    content: assistantMessage.content,
-                    toolCalls: calls
-                )
+            let assistantHistoryMessage = Message(
+                role: "assistant",
+                content: assistantMessage.content,
+                toolCalls: calls
             )
+            messages.append(assistantHistoryMessage)
+            durableMessages.append(assistantHistoryMessage)
 
             if !calls.isEmpty {
                 Log.toolLoop("step \(step + 1)")
@@ -200,10 +204,12 @@ final class ConversationEngine: @unchecked Sendable {
                             activeReminderAcknowledged = true
                         }
                     }
-
-                    messages.append(
-                        Message(role: "tool", content: result)
+                    let toolHistoryMessage = Message(
+                        role: "tool",
+                        content: result
                     )
+                    messages.append(toolHistoryMessage)
+                    durableMessages.append(toolHistoryMessage)
                 }
 
                 continue
@@ -214,16 +220,16 @@ final class ConversationEngine: @unchecked Sendable {
             )
 
             if reply.isEmpty {
-                messages.append(
-                    Message(
-                        role: "user",
-                        content: """
-                            You returned neither a tool call nor spoken text.
-                            Return one short natural spoken response, or invoke the
-                            required native tool now.
-                            """
-                    )
+                let retryMessage = Message(
+                    role: "user",
+                    content: """
+                        You returned neither a tool call nor spoken text.
+                        Return one short natural spoken response, or invoke the
+                        required native tool now.
+                        """
                 )
+                messages.append(retryMessage)
+                durableMessages.append(retryMessage)
                 continue
             }
 
@@ -238,20 +244,21 @@ final class ConversationEngine: @unchecked Sendable {
 
                 retriedReminderAcknowledgement = true
 
-                messages.append(
-                    Message(
-                        role: "user",
-                        content: """
-                            Validation failure: you claimed the active reminder was
-                            completed, dismissed, or acknowledged without a successful
-                            acknowledge_reminder tool call.
+                let validationMessage = Message(
+                    role: "user",
+                    content: """
+                        Validation failure: you claimed the active reminder was
+                        completed, dismissed, or acknowledged without a successful
+                        acknowledge_reminder tool call.
 
-                            Invoke acknowledge_reminder now if the user completed or
-                            dismissed it. Otherwise speak naturally without claiming
-                            completion.
-                            """
-                    )
+
+                        Invoke acknowledge_reminder now if the user completed or
+                        dismissed it. Otherwise speak naturally without claiming
+                        completion.
+                        """
                 )
+                messages.append(validationMessage)
+                durableMessages.append(validationMessage)
                 continue
             }
 
@@ -261,7 +268,7 @@ final class ConversationEngine: @unchecked Sendable {
                 toolResults: toolResults,
                 attemptedToolNames: attemptedToolNames,
                 successfulToolNames: successfulToolNames,
-                finalMessages: messages
+                finalMessages: durableMessages
             )
         }
 
