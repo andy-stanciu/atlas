@@ -12,7 +12,7 @@ final class SoundEffects {
         for name in [
             "startup", "shutdown", "tool_call", "reminder", "announcement",
         ] {
-            if let pcm = decode(name, fileExtension: "mp3") {
+            if let pcm = decode(name, fileExtension: "mp3", volume: Config.sfxVolume) {
                 cache["\(name).mp3"] = pcm
             } else {
                 Log.system("[sound effect missing] \(name).mp3")
@@ -25,7 +25,11 @@ final class SoundEffects {
     /// Tries "<name>.mp3" first, then "<name>.wav". Returns false if
     /// neither exists, so callers can fall back to a generic cue.
     @discardableResult
-    func play(_ name: String, fileExtension: String = "mp3") -> Bool {
+    func play(
+        _ name: String,
+        fileExtension: String = "mp3",
+        volume: Float = Config.sfxVolume
+    ) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         if let pcm = cache["\(name).mp3"] ?? cache["\(name).wav"] {
@@ -33,9 +37,9 @@ final class SoundEffects {
             return true
         }
         let pcm =
-            decode(name, fileExtension: fileExtension)
+            decode(name, fileExtension: fileExtension, volume: volume)
             ?? (fileExtension == "mp3"
-                ? decode(name, fileExtension: "wav")
+                ? decode(name, fileExtension: "wav", volume: volume)
                 : nil)
 
         guard let pcm else {
@@ -49,7 +53,11 @@ final class SoundEffects {
         return true
     }
 
-    private func decode(_ name: String, fileExtension: String) -> Data? {
+    private func decode(
+        _ name: String,
+        fileExtension: String,
+        volume: Float
+    ) -> Data? {
         guard
             let url = Bundle.module.url(
                 forResource: name,
@@ -125,7 +133,7 @@ final class SoundEffects {
         for index in 0..<count {
             let scaled = max(
                 -1,
-                min(1, floats[0][index] * Config.sfxVolume)
+                min(1, floats[0][index] * volume)
             )
             var value = Int16(scaled * Float(Int16.max)).littleEndian
             withUnsafeBytes(of: &value) {

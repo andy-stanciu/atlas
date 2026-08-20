@@ -139,10 +139,15 @@ extension VoiceAssistant {
         guard isCurrentTurn(turnID) else {
             return
         }
-        if let toolName, soundEffects.play("tool_\(toolName)") {
+        if !Config.verboseToolCalling {
             return
         }
-        // fallback: play generic sfx
+        if let toolName {
+            soundEffects.play(
+                "tool_\(toolName)",
+                volume: Config.speakingVolume
+            )
+        }
         soundEffects.play("tool_call")
     }
 
