@@ -9,6 +9,11 @@ struct Config {
             ?? "http://192.168.1.232:8000/v1"
     )!
 
+    static let ttsServerHost =
+        ProcessInfo.processInfo.environment["ATLAS_TTS_HOST"]
+        ?? "192.168.1.232"
+    static let ttsServerPort = 8767
+
     static let toolServerURL = URL(
         string: "http://127.0.0.1:8090"
     )!
@@ -43,13 +48,6 @@ struct Config {
     static let maxToolLoopSteps = 16
     static let lowLatencyMode = true
     static let verboseToolCalling = true
-
-    static let pythonExecutable =
-        ProcessInfo.processInfo.environment["PYTHON_EXECUTABLE"]
-        ?? "\(NSHomeDirectory())/workplace/atlas/src/client/.venv/bin/python"
-
-    static let ttsWorkerScript =
-        "\(NSHomeDirectory())/workplace/atlas/src/client/kokoro_worker.py"
 
     // Audio interface settings
     static let speechThreshold: Float = 0.025

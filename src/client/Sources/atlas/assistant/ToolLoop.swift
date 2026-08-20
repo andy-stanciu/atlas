@@ -2,11 +2,12 @@ import Foundation
 import QuartzCore
 
 extension VoiceAssistant {
-    func streamOllama(
+    func streamLLM(
         _ userText: String,
         turnID: UUID,
         speakerInstruction: String? = nil,
-        onSentence: @escaping (String) async throws -> Void
+        trailingInstructions: [String] = [],
+        onSentence: @escaping (String) async throws -> Void,
     ) async throws -> String {
         let activeReminder = await notificationCoordinator?
             .acknowledgementEligibleReminderSnapshot()
@@ -26,9 +27,11 @@ extension VoiceAssistant {
             }
         }
 
+        let tools = try await toolsForTurn()
         let engine = ConversationEngine(
             llm: llm,
             toolServer: toolServer,
+            preloadedTools: tools,
             onToolBatch: { [weak self] calls in
                 guard let self else {
                     return
@@ -53,7 +56,8 @@ extension VoiceAssistant {
             to: userText,
             history: snapshot,
             activeReminderText: activeReminder?.text,
-            speakerInstruction: speakerInstruction
+            speakerInstruction: speakerInstruction,
+            trailingInstructions: trailingInstructions
         )
         Log.timing(
             "LLM complete: "

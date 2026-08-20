@@ -1,5 +1,11 @@
 import Foundation
 
+func makeCanonicalJSONEncoder() -> JSONEncoder {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return encoder
+}
+
 final class LLMClient: @unchecked Sendable {
     private struct WireRequest: Encodable {
         struct WireMessage: Encodable {
@@ -35,7 +41,7 @@ final class LLMClient: @unchecked Sendable {
             private static func stringify(
                 _ arguments: [String: JSONValue]
             ) -> String {
-                guard let data = try? JSONEncoder().encode(arguments) else {
+                guard let data = try? makeCanonicalJSONEncoder().encode(arguments) else {
                     return "{}"
                 }
                 return String(decoding: data, as: UTF8.self)
@@ -152,7 +158,7 @@ final class LLMClient: @unchecked Sendable {
             tools: tools,
             temperature: temperature
         )
-        request.httpBody = try JSONEncoder().encode(
+        request.httpBody = try makeCanonicalJSONEncoder().encode(
             WireRequest(
                 model: Config.llmModel,
                 messages: Self.normalizeMessages(messages)
@@ -468,7 +474,7 @@ final class LLMClient: @unchecked Sendable {
             tools: tools,
             temperature: temperature
         )
-        request.httpBody = try JSONEncoder().encode(
+        request.httpBody = try makeCanonicalJSONEncoder().encode(
             WireRequest(
                 model: Config.llmModel,
                 messages: Self.normalizeMessages(messages)

@@ -142,7 +142,8 @@ extension VoiceAssistant {
             beginGenerationTurn(
                 userText: userText,
                 speakerIdentity: speakerIdentity,
-                speakerInstruction: instruction,
+                speakerInstruction: nil,
+                trailingInstructions: [instruction],
                 playThinkingFiller: false
             )
 
@@ -171,22 +172,16 @@ extension VoiceAssistant {
             return
         }
         var onCompletion: (@Sendable () async -> Void)?
-        var speakerInstruction = speakerIdentity.flatMap {
+        var trailingInstructions: [String] = []
+        let speakerInstruction = speakerIdentity.flatMap {
             self.speakerContextInstruction(for: $0)
         }
         if closing != .none {
-            let closingInstruction =
+            trailingInstructions.append(
                 acknowledgedReminder
-                ? SystemPrompts.conversationClosingWithReminderInstruction
-                : SystemPrompts.conversationClosingInstruction
-
-            speakerInstruction = [
-                speakerInstruction,
-                closingInstruction,
-            ]
-            .compactMap { $0 }
-            .joined(separator: "\n\n")
-
+                    ? SystemPrompts.conversationClosingWithReminderInstruction
+                    : SystemPrompts.conversationClosingInstruction
+            )
             onCompletion = { [weak self] in
                 self?.scheduleConversationEndAfterSpeech()
             }
@@ -200,6 +195,7 @@ extension VoiceAssistant {
             userText: generationText,
             speakerIdentity: speakerIdentity,
             speakerInstruction: speakerInstruction,
+            trailingInstructions: trailingInstructions,
             playThinkingFiller: Config.lowLatencyMode ? false : !wakeOnly,
             onCompletion: onCompletion
         )
@@ -256,6 +252,7 @@ extension VoiceAssistant {
         userText: String,
         speakerIdentity: SpeakerIdentity?,
         speakerInstruction: String?,
+        trailingInstructions: [String] = [],
         playThinkingFiller: Bool,
         onCompletion: (@Sendable () async -> Void)? = nil
     ) {
@@ -289,10 +286,11 @@ extension VoiceAssistant {
             defer { self.finishGeneration(for: turnID) }
             var printedAnyText = false
             do {
-                let fullReply = try await self.streamOllama(
+                let fullReply = try await self.streamLLM(
                     userText,
                     turnID: turnID,
-                    speakerInstruction: speakerInstruction
+                    speakerInstruction: speakerInstruction,
+                    trailingInstructions: trailingInstructions,
                 ) { [weak self] sentence in
                     guard let self else {
                         return

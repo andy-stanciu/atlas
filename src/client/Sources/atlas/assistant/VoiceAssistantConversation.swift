@@ -13,6 +13,7 @@ extension VoiceAssistant {
                 Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
+        Task { await prefetchTools() }
         soundEffects.play("startup")
         Log.blank()
         Log.system("Atlas is listening.")
@@ -29,6 +30,7 @@ extension VoiceAssistant {
                 Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
+        Task { await prefetchTools() }
         Log.blank()
         Log.system("Atlas is listening for your reminder response.")
         resetConversationTimeout()
@@ -85,10 +87,29 @@ extension VoiceAssistant {
         }
 
         if didEnd {
+            clearTools()
             soundEffects.play("shutdown")
             Log.blank()
             Log.system("Atlas conversation ended. Say “Hey Atlas” to start again.")
         }
+    }
+
+    func prefetchTools() async {
+        if lock.withLock({ cachedTools != nil }) { return }
+        if let tools = try? await toolServer.availableTools() {
+            lock.withLock { cachedTools = tools }
+        }
+    }
+
+    func clearTools() {
+        lock.withLock { cachedTools = nil }
+    }
+
+    func toolsForTurn() async throws -> [ToolDefinition] {
+        if let tools = lock.withLock({ cachedTools }) { return tools }
+        let tools = try await toolServer.availableTools()
+        lock.withLock { cachedTools = tools }
+        return tools
     }
 
     func cancelConversationTimeout() {

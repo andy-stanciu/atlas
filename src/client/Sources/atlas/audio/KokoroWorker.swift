@@ -1,143 +1,230 @@
 import Foundation
+import Network
 
 final class KokoroWorker: @unchecked Sendable {
-    private let process = Process()
-    private let stdin = Pipe()
-    private let stdout = Pipe()
     private let lock = NSLock()
+    private var connection: NWConnection?
+    private var nextRequestID: UInt32 = 1
 
-    init() throws {
-        process.executableURL = URL(
-            fileURLWithPath: Config.pythonExecutable
-        )
-
-        process.arguments = [Config.ttsWorkerScript]
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = FileHandle.standardError
-
-        try process.run()
-
-        var startupLines = [String]()
-
-        while true {
-            let line = try readLine()
-
-            if line == "READY" {
-                break
-            }
-
-            startupLines.append(line)
-
-            if startupLines.count >= 20 {
-                throw NSError(
-                    domain: "Kokoro",
-                    code: 1,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Kokoro worker did not become ready. Output:\n"
-                                + startupLines.joined(separator: "\n")
-                    ]
-                )
-            }
-        }
-    }
-
-    deinit {
-        if process.isRunning {
-            process.terminate()
-        }
-    }
-
-    func synthesize(text: String) throws -> URL {
+    /// Synthesizes text, returning 24 kHz s16le mono PCM.
+    /// Serialized: one outstanding request at a time, matching the
+    /// ordered sentence queue in AudioPlayback.
+    func synthesize(text: String) throws -> Data {
         try lock.withLock {
-            guard process.isRunning else {
-                throw NSError(
-                    domain: "Kokoro",
-                    code: 2,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Kokoro worker is not running."
-                    ]
-                )
+            let requestID = nextRequestID
+            nextRequestID &+= 1
+
+            var lastError: Error?
+            for attempt in 0...1 {
+                do {
+                    let connection = try activeConnection()
+                    try sendRequest(
+                        connection,
+                        id: requestID,
+                        text: text
+                    )
+                    return try readResponse(
+                        connection,
+                        id: requestID
+                    )
+                } catch {
+                    lastError = error
+                    dropConnection()
+                    guard attempt == 0 else { break }
+                }
             }
+            throw lastError
+                ?? NSError(domain: "Kokoro", code: 5, userInfo: nil)
+        }
+    }
 
-            let outputURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent(
-                    "voice-tts-\(UUID().uuidString).wav"
-                )
+    // MARK: - Connection
 
-            let payload = [
-                "text": text,
-                "output_path": outputURL.path,
-            ]
+    private func activeConnection() throws -> NWConnection {
+        if let connection, connection.state == .ready {
+            return connection
+        }
+        dropConnection()
 
-            let data = try JSONSerialization.data(
-                withJSONObject: payload
+        let connection = NWConnection(
+            host: NWEndpoint.Host(Config.ttsServerHost),
+            port: NWEndpoint.Port(integerLiteral: UInt16(Config.ttsServerPort)),
+            using: .tcp
+        )
+        let semaphore = DispatchSemaphore(value: 0)
+        var ready = false
+        connection.stateUpdateHandler = { state in
+            if state == .ready {
+                ready = true
+                semaphore.signal()
+            } else if case .failed = state {
+                semaphore.signal()
+            } else if case .cancelled = state {
+                semaphore.signal()
+            }
+        }
+        connection.start(queue: .global(qos: .userInitiated))
+        let result = semaphore.wait(timeout: .now() + 3)
+        guard result == .success, ready else {
+            connection.cancel()
+            throw NSError(
+                domain: "Kokoro",
+                code: 6,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not connect to TTS server at "
+                        + "\(Config.ttsServerHost):\(Config.ttsServerPort)."
+                ]
+            )
+        }
+        self.connection = connection
+        return connection
+    }
+
+    private func dropConnection() {
+        connection?.cancel()
+        connection = nil
+    }
+
+    // MARK: - Wire I/O
+
+    private func sendRequest(
+        _ connection: NWConnection,
+        id: UInt32,
+        text: String
+    ) throws {
+        let payload = try JSONSerialization.data(
+            withJSONObject: ["id": id, "text": text]
+        )
+        var frame = Data(capacity: 5 + payload.count)
+        var length = UInt32(payload.count).littleEndian
+        frame.append(contentsOf: withUnsafeBytes(of: &length) { Array($0) })
+        frame.append(0x01)
+        frame.append(payload)
+
+        try sendAll(connection, data: frame)
+    }
+
+    private func readResponse(
+        _ connection: NWConnection,
+        id: UInt32
+    ) throws -> Data {
+        var pcm = Data()
+        while true {
+            let header = try receiveExact(connection, length: 5)
+            let length = header.withUnsafeBytes {
+                $0.load(as: UInt32.self)
+            }
+            let frameType = header[4]
+            let payload = try receiveExact(
+                connection,
+                length: Int(length)
             )
 
-            stdin.fileHandleForWriting.write(data)
-            stdin.fileHandleForWriting.write(Data([0x0A]))
+            guard payload.count >= 4 else { continue }
+            let frameID = payload.withUnsafeBytes {
+                $0.load(as: UInt32.self)
+            }
+            guard frameID == id else { continue }
 
-            let responseLine = try readLine()
-            let responseData = Data(responseLine.utf8)
-
-            guard
-                let response = try JSONSerialization.jsonObject(
-                    with: responseData
-                ) as? [String: Any],
-                response["ok"] as? Bool == true,
-                FileManager.default.fileExists(
-                    atPath: outputURL.path
+            switch frameType {
+            case 0x02:
+                pcm.append(payload.dropFirst(8))
+            case 0x03:
+                return pcm
+            case 0x04:
+                let message = String(
+                    decoding: payload.dropFirst(4),
+                    as: UTF8.self
                 )
-            else {
-                let errorMessage =
-                    (
-                        try? JSONSerialization.jsonObject(
-                            with: responseData
-                        ) as? [String: Any]
-                    )?["error"] as? String ?? responseLine
-
                 throw NSError(
                     domain: "Kokoro",
                     code: 3,
                     userInfo: [
                         NSLocalizedDescriptionKey:
-                            "Kokoro generation failed: \(errorMessage)"
+                            "Kokoro generation failed: \(message)"
                     ]
                 )
+            default:
+                continue
             }
-
-            return outputURL
         }
     }
 
-    private func readLine() throws -> String {
-        var bytes = [UInt8]()
+    private func sendAll(
+        _ connection: NWConnection,
+        data: Data
+    ) throws {
+        var offset = 0
+        while offset < data.count {
+            let chunk = data.subdata(in: offset..<data.count)
+            let written = try withUnsafeSend(connection, content: chunk)
+            offset += written
+        }
+    }
 
-        while true {
-            let data = try stdout.fileHandleForReading.read(
-                upToCount: 1
-            )
+    private func withUnsafeSend(
+        _ connection: NWConnection,
+        content: Data
+    ) throws -> Int {
+        let semaphore = DispatchSemaphore(value: 0)
+        var sendError: Error?
+        connection.send(
+            content: content,
+            completion: .contentProcessed { error in
+                sendError = error
+                semaphore.signal()
+            }
+        )
+        let result = semaphore.wait(timeout: .now() + 5)
+        guard result == .success else {
+            throw NSError(domain: "Kokoro", code: 7, userInfo: nil)
+        }
+        if let sendError {
+            throw sendError
+        }
+        return content.count
+    }
 
-            guard let data, let byte = data.first else {
+    private func receiveExact(
+        _ connection: NWConnection,
+        length: Int
+    ) throws -> Data {
+        var data = Data()
+        while data.count < length {
+            let semaphore = DispatchSemaphore(value: 0)
+            var received: Data?
+            var receiveError: Error?
+            connection.receive(
+                minimumIncompleteLength: 1,
+                maximumLength: length - data.count
+            ) { content, _, isComplete, error in
+                received = content
+                receiveError =
+                    error
+                    ?? (isComplete
+                        ? NSError(domain: "Kokoro", code: 8, userInfo: nil)
+                        : nil)
+                semaphore.signal()
+            }
+            let result = semaphore.wait(timeout: .now() + 30)
+            guard result == .success else {
                 throw NSError(
                     domain: "Kokoro",
-                    code: 4,
+                    code: 9,
                     userInfo: [
                         NSLocalizedDescriptionKey:
-                            "Kokoro worker closed its output stream."
+                            "Timed out waiting for TTS audio."
                     ]
                 )
             }
-
-            if byte == 0x0A {
-                break
+            if let receiveError {
+                throw receiveError
             }
-
-            bytes.append(byte)
+            if let received {
+                data.append(received)
+            }
         }
-
-        return String(decoding: bytes, as: UTF8.self)
+        return data
     }
 }

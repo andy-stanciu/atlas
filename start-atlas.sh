@@ -22,6 +22,9 @@ if ! curl -sf --max-time 3 "$LLM_BASE/v1/models" >/dev/null; then
     echo "warning: vllm not reachable at $LLM_BASE - start a local server first" >&2
   fi
 fi
+if ! timeout 3 bash -c "</dev/tcp/192.168.1.232/8767" 2>/dev/null; then
+  echo "warning: tts server not reachable - check 'sudo systemctl status atlas-tts' on the PC" >&2
+fi
 
 
 cmds=()

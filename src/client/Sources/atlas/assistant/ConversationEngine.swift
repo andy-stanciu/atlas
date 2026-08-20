@@ -22,7 +22,7 @@ enum ConversationEngineError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .emptyResponse:
-            return "Ollama returned neither tool calls nor spoken text."
+            return "LLM returned neither tool calls nor spoken text."
 
         case .toolLoopExceeded:
             return "Tool loop exceeded its maximum number of steps."
@@ -45,6 +45,7 @@ enum ConversationEngineError: LocalizedError, Equatable {
 final class ConversationEngine: @unchecked Sendable {
     private let llm: any LLMServing
     private let toolServer: any ToolServing
+    private let preloadedTools: [ToolDefinition]?
     private let maxSteps: Int
     private let systemPrompt: String
     private let normalize: (String) -> String
@@ -54,6 +55,7 @@ final class ConversationEngine: @unchecked Sendable {
     init(
         llm: any LLMServing,
         toolServer: any ToolServing,
+        preloadedTools: [ToolDefinition]? = nil,
         maxSteps: Int = Config.maxToolLoopSteps,
         systemPrompt: String = SystemPrompts.mainSystemPrompt,
         normalize: @escaping (String) -> String = {
@@ -85,6 +87,7 @@ final class ConversationEngine: @unchecked Sendable {
     ) {
         self.llm = llm
         self.toolServer = toolServer
+        self.preloadedTools = preloadedTools
         self.maxSteps = maxSteps
         self.systemPrompt = systemPrompt
         self.normalize = normalize
@@ -98,7 +101,8 @@ final class ConversationEngine: @unchecked Sendable {
             Message(role: "system", content: SystemPrompts.mainSystemPrompt)
         ],
         activeReminderText: String? = nil,
-        speakerInstruction: String? = nil
+        speakerInstruction: String? = nil,
+        trailingInstructions: [String] = []
     ) async throws -> ConversationResult {
         var messages = history
         var durableMessages = history
@@ -106,18 +110,6 @@ final class ConversationEngine: @unchecked Sendable {
 
         if let speakerInstruction {
             transientInstructions.append(speakerInstruction)
-        }
-
-        if let activeReminderText {
-            transientInstructions.append(
-                SystemPrompts.activeReminderResponseInstruction
-            )
-            transientInstructions.append(
-                """
-                Active reminder text:
-                \(activeReminderText)
-                """
-            )
         }
 
         if !transientInstructions.isEmpty {
@@ -134,11 +126,37 @@ final class ConversationEngine: @unchecked Sendable {
             )
         }
 
+        var boundary = trailingInstructions
+        if let activeReminderText {
+            boundary.insert(
+                SystemPrompts.activeReminderResponseInstruction,
+                at: 0
+            )
+            boundary.insert(
+                """
+                Active reminder text:
+                \(activeReminderText)
+                """,
+                at: 1
+            )
+        }
+
         let userMessage = Message(role: "user", content: userText)
         messages.append(userMessage)
         durableMessages.append(userMessage)
 
-        let tools = try await toolServer.availableTools()
+        if !boundary.isEmpty {
+            messages.append(
+                Message(role: "user", content: boundary.joined(separator: "\n\n"))
+            )
+        }
+
+        let tools: [ToolDefinition]
+        if let preloadedTools {
+            tools = preloadedTools
+        } else {
+            tools = try await toolServer.availableTools()
+        }
 
         var attemptedToolNames: [String] = []
         var successfulToolNames: [String] = []

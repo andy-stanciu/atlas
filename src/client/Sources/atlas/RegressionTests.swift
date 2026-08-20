@@ -939,7 +939,7 @@ private enum RegressionTools {
 private func renderJSON(
     _ value: [String: JSONValue]
 ) -> String {
-    guard let data = try? JSONEncoder().encode(value),
+    guard let data = try? makeCanonicalJSONEncoder().encode(value),
         let text = String(data: data, encoding: .utf8)
     else {
         return String(describing: value)

@@ -19,7 +19,6 @@ final class AudioPlayback: @unchecked Sendable {
     private let satellite: SatelliteLink
     private let kokoro: KokoroWorker
     private let queue: DispatchQueue
-    private let voiceFormat: AVAudioFormat
 
     private let beginSpeaking: (PlaybackPurpose) -> Bool
     private let finishSpeaking: (PlaybackPurpose) -> Void
@@ -29,7 +28,6 @@ final class AudioPlayback: @unchecked Sendable {
         satellite: SatelliteLink,
         kokoro: KokoroWorker,
         queue: DispatchQueue,
-        voiceFormat: AVAudioFormat,
         beginSpeaking: @escaping (PlaybackPurpose) -> Bool,
         finishSpeaking: @escaping (PlaybackPurpose) -> Void,
         beginScheduledSpeech: @escaping () -> Bool
@@ -37,7 +35,6 @@ final class AudioPlayback: @unchecked Sendable {
         self.satellite = satellite
         self.kokoro = kokoro
         self.queue = queue
-        self.voiceFormat = voiceFormat
         self.beginSpeaking = beginSpeaking
         self.finishSpeaking = finishSpeaking
         self.beginScheduledSpeech = beginScheduledSpeech
@@ -73,26 +70,19 @@ final class AudioPlayback: @unchecked Sendable {
         _ text: String,
         onStarted: @escaping @Sendable () async -> Void
     ) async throws -> SpeechPlaybackOutcome {
-        let wavURL = try await synthesize(text)
+        let pcm = try await synthesize(text)
 
         return await withCheckedContinuation { continuation in
             queue.async { [weak self] in
                 guard let self else {
-                    try? FileManager.default.removeItem(at: wavURL)
                     continuation.resume(returning: .notStarted)
                     return
                 }
-
-                do {
-                    try self.playScheduledWAV(
-                        wavURL,
-                        continuation: continuation,
-                        onStarted: onStarted
-                    )
-                } catch {
-                    try? FileManager.default.removeItem(at: wavURL)
-                    continuation.resume(returning: .failed)
-                }
+                self.playScheduledPCM(
+                    pcm,
+                    continuation: continuation,
+                    onStarted: onStarted
+                )
             }
         }
     }
@@ -103,51 +93,38 @@ final class AudioPlayback: @unchecked Sendable {
         turnID: UUID,
         isCurrentTurn: @escaping @Sendable (UUID) -> Bool
     ) async throws {
-        let wavURL = try await synthesize(text)
+        let pcm = try await synthesize(text)
 
         guard isCurrentTurn(turnID) else {
-            try? FileManager.default.removeItem(at: wavURL)
             return
         }
 
-        try await withCheckedThrowingContinuation { continuation in
+        await withCheckedContinuation { continuation in
             queue.async { [weak self] in
-                guard let self else {
-                    try? FileManager.default.removeItem(at: wavURL)
+                guard let self, isCurrentTurn(turnID) else {
                     continuation.resume()
                     return
                 }
-
-                guard isCurrentTurn(turnID) else {
-                    try? FileManager.default.removeItem(at: wavURL)
-                    continuation.resume()
-                    return
-                }
-
-                do {
-                    try self.queueWAV(
-                        wavURL,
-                        purpose: purpose,
-                        turnID: turnID,
-                        isCurrentTurn: isCurrentTurn
-                    )
-                    continuation.resume()
-                } catch {
-                    try? FileManager.default.removeItem(at: wavURL)
-                    continuation.resume(throwing: error)
-                }
+                self.queuePCM(
+                    pcm,
+                    purpose: purpose,
+                    turnID: turnID,
+                    isCurrentTurn: isCurrentTurn
+                )
+                continuation.resume()
             }
         }
     }
 
-    private func synthesize(_ text: String) async throws -> URL {
+    /// Synthesizes one sentence on the PC, returning 24 kHz s16le PCM.
+    private func synthesize(_ text: String) async throws -> Data {
         try Task.checkCancellation()
 
         return try await withCheckedThrowingContinuation { continuation in
             queue.async { [kokoro] in
                 do {
                     let startedAt = CACurrentMediaTime()
-                    let wavURL = try kokoro.synthesize(text: text)
+                    let pcm = try kokoro.synthesize(text: text)
                     let elapsed = CACurrentMediaTime() - startedAt
 
                     Log.timing(
@@ -155,7 +132,7 @@ final class AudioPlayback: @unchecked Sendable {
                             + "\(String(format: "%.3f", elapsed)) s"
                     )
 
-                    continuation.resume(returning: wavURL)
+                    continuation.resume(returning: pcm)
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -163,26 +140,23 @@ final class AudioPlayback: @unchecked Sendable {
         }
     }
 
-    private func queueWAV(
-        _ wavURL: URL,
+    private func queuePCM(
+        _ pcm: Data,
         purpose: PlaybackPurpose,
         turnID: UUID,
         isCurrentTurn: @escaping @Sendable (UUID) -> Bool
-    ) throws {
-        let pcm = try makeOutputPCM(from: wavURL)
+    ) {
+        let output = scalePCM(pcm)
 
         guard isCurrentTurn(turnID) else {
-            try? FileManager.default.removeItem(at: wavURL)
             return
         }
 
         guard beginSpeaking(purpose) else {
-            try? FileManager.default.removeItem(at: wavURL)
             return
         }
 
-        satellite.enqueue(pcm: pcm) { [weak self] _ in
-            try? FileManager.default.removeItem(at: wavURL)
+        satellite.enqueue(pcm: output) { [weak self] _ in
             DispatchQueue.global(
                 qos: .userInitiated
             ).async {
@@ -191,25 +165,21 @@ final class AudioPlayback: @unchecked Sendable {
         }
     }
 
-    private func playScheduledWAV(
-        _ wavURL: URL,
+    private func playScheduledPCM(
+        _ pcm: Data,
         continuation: CheckedContinuation<SpeechPlaybackOutcome, Never>,
         onStarted: @escaping @Sendable () async -> Void
-    ) throws {
-        let pcm = try makeOutputPCM(from: wavURL)
+    ) {
+        let output = scalePCM(pcm)
 
         guard beginScheduledSpeech() else {
-            try? FileManager.default.removeItem(at: wavURL)
             continuation.resume(returning: .notStarted)
             return
         }
 
-        // onStarted enqueues the chime; awaiting it first keeps the
-        // chime ahead of the speech in the sink's FIFO.
         Task { [weak self] in
             await onStarted()
-            self?.satellite.enqueue(pcm: pcm) { played in
-                try? FileManager.default.removeItem(at: wavURL)
+            self?.satellite.enqueue(pcm: output) { played in
                 DispatchQueue.global(
                     qos: .userInitiated
                 ).async {
@@ -222,120 +192,29 @@ final class AudioPlayback: @unchecked Sendable {
         }
     }
 
-    private func makeOutputPCM(
-        from wavURL: URL
-    ) throws -> Data {
-        let file = try AVAudioFile(forReading: wavURL)
-        let sourceFrames = AVAudioFrameCount(file.length)
-
-        guard
-            let sourceBuffer = AVAudioPCMBuffer(
-                pcmFormat: file.processingFormat,
-                frameCapacity: sourceFrames
-            )
-        else {
-            throw NSError(
-                domain: "Atlas",
-                code: 30,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "Could not allocate source TTS buffer."
-                ]
-            )
-        }
-
-        try file.read(into: sourceBuffer)
-
-        guard
-            let converter = AVAudioConverter(
-                from: file.processingFormat,
-                to: voiceFormat
-            )
-        else {
-            throw NSError(
-                domain: "Atlas",
-                code: 31,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "Could not create TTS sample-rate converter."
-                ]
-            )
-        }
-
-        let ratio = voiceFormat.sampleRate / file.processingFormat.sampleRate
-        let outputCapacity =
-            AVAudioFrameCount(
-                Double(sourceBuffer.frameLength) * ratio
-            ) + 1
-
-        guard
-            let outputBuffer = AVAudioPCMBuffer(
-                pcmFormat: voiceFormat,
-                frameCapacity: outputCapacity
-            )
-        else {
-            throw NSError(
-                domain: "Atlas",
-                code: 32,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "Could not allocate converted TTS buffer."
-                ]
-            )
-        }
-
-        var conversionError: NSError?
-        var sourceConsumed = false
-
-        let status = converter.convert(
-            to: outputBuffer,
-            error: &conversionError
-        ) { _, outputStatus in
-            if sourceConsumed {
-                outputStatus.pointee = .noDataNow
-                return nil
-            }
-
-            sourceConsumed = true
-            outputStatus.pointee = .haveData
-            return sourceBuffer
-        }
-
-        guard status != .error, conversionError == nil else {
-            throw conversionError
-                ?? NSError(
-                    domain: "Atlas",
-                    code: 33,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "TTS sample-rate conversion failed."
-                    ]
+    /// Applies speakingVolume to 24 kHz s16le PCM from the TTS server.
+    /// The server sends native-rate audio, so no resampling is needed.
+    private func scalePCM(_ pcm: Data) -> Data {
+        var output = Data(capacity: pcm.count)
+        pcm.withUnsafeBytes { raw in
+            let samples = raw.bindMemory(to: Int16.self)
+            for sample in samples {
+                let scaled = max(
+                    -32768,
+                    min(
+                        32767,
+                        Int32(
+                            (Float(sample) * Config.speakingVolume)
+                                .rounded()
+                        )
+                    )
                 )
-        }
-
-        guard let floats = outputBuffer.floatChannelData else {
-            throw NSError(
-                domain: "Atlas",
-                code: 34,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "Converted TTS buffer has no float data."
-                ]
-            )
-        }
-
-        let count = Int(outputBuffer.frameLength)
-        var pcm = Data(capacity: count * 2)
-        for index in 0..<count {
-            let scaled = max(
-                -1,
-                min(1, floats[0][index] * Config.speakingVolume)
-            )
-            var value = Int16(scaled * Float(Int16.max)).littleEndian
-            withUnsafeBytes(of: &value) {
-                pcm.append(contentsOf: $0)
+                var value = Int16(scaled).littleEndian
+                withUnsafeBytes(of: &value) {
+                    output.append(contentsOf: $0)
+                }
             }
         }
-        return pcm
+        return output
     }
 }

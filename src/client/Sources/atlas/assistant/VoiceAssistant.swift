@@ -14,13 +14,6 @@ final class VoiceAssistant {
         qos: .userInitiated
     )
 
-    let voiceFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: Config.satelliteDownlinkSampleRate,
-        channels: 1,
-        interleaved: false
-    )!
-
     let kokoro: KokoroWorker
     let llm = LLMClient()
     let toolServer = ToolServerClient()
@@ -84,9 +77,10 @@ final class VoiceAssistant {
     var history = [
         Message(role: "system", content: SystemPrompts.mainSystemPrompt)
     ]
+    var cachedTools: [ToolDefinition]?
 
     init() throws {
-        kokoro = try KokoroWorker()
+        kokoro = KokoroWorker()
         speakerEnrollment = SpeakerEnrollmentCoordinator(
             speakerClient: speakerClient,
             llm: llm
@@ -107,7 +101,6 @@ final class VoiceAssistant {
             satellite: satellite,
             kokoro: kokoro,
             queue: ttsQueue,
-            voiceFormat: voiceFormat,
             beginSpeaking: { [weak self] purpose in
                 self?.beginPlayback(purpose: purpose) ?? false
             },
