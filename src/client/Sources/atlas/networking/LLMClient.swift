@@ -7,6 +7,27 @@ func makeCanonicalJSONEncoder() -> JSONEncoder {
 }
 
 final class LLMClient: @unchecked Sendable {
+    enum ToolChoice: Encodable {
+        case auto
+        case function(name: String)
+
+        private struct FunctionChoice: Encodable {
+            struct Function: Encodable { let name: String }
+            let type = "function"
+            let function: Function
+        }
+
+        func encode(to encoder: Encoder) throws {
+            switch self {
+            case .auto:
+                var container = encoder.singleValueContainer()
+                try container.encode("auto")
+            case .function(let name):
+                try FunctionChoice(function: .init(name: name)).encode(to: encoder)
+            }
+        }
+    }
+
     private struct WireRequest: Encodable {
         struct WireMessage: Encodable {
             struct WireToolCall: Encodable {
@@ -51,6 +72,7 @@ final class LLMClient: @unchecked Sendable {
         let model: String
         let messages: [WireMessage]
         let tools: [ToolDefinition]?
+        let tool_choice: ToolChoice?
         let temperature: Double
         let max_tokens: Int
         let stream: Bool
@@ -83,6 +105,7 @@ final class LLMClient: @unchecked Sendable {
         messages: [Message],
         tools: [ToolDefinition],
         temperature: Double = Config.llmDefaultTemperature,
+        toolChoice: ToolChoice? = nil,
         prefixTracked: Bool = true,
         onDelta: (String) -> Void
     ) async throws -> Message {
@@ -97,6 +120,7 @@ final class LLMClient: @unchecked Sendable {
                 messages: Self.normalizeMessages(messages)
                     .map(WireRequest.WireMessage.init),
                 tools: tools.isEmpty ? nil : tools,
+                tool_choice: toolChoice,
                 temperature: temperature,
                 max_tokens: Config.llmMaxTokens,
                 stream: true,

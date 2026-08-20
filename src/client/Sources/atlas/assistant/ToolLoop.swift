@@ -68,13 +68,21 @@ extension VoiceAssistant {
                 ) + "s"
         )
 
+        if activeReminder != nil || !trailingInstructions.isEmpty {
+            LLMPrefixStability.reset()
+        }
+
         try Task.checkCancellation()
 
-        if result.successfulToolNames.contains(
-            "acknowledge_reminder"
-        ) {
-            await notificationCoordinator?
-                .markReminderAcknowledged()
+        if let status = addressReminderStatus(result) {
+            switch status {
+            case "acknowledged":
+                await notificationCoordinator?.markReminderAcknowledged()
+            case "still_active":
+                await notificationCoordinator?.markReminderStillActive()
+            default:
+                break
+            }
         }
 
         if let remaining = accumulator.finish() {
@@ -92,17 +100,11 @@ extension VoiceAssistant {
                 return
             }
 
-            // Update history with the final messages from the conversation
-            // result. Proactive turns (no real user utterance) drop their
-            // synthetic reply — the next turn's real user message carries
-            // the conversational context instead.
             var updated = result.finalMessages
             if !persistAssistantReply, updated.last?.role == "assistant" {
                 updated.removeLast()
             }
-            history = updated.filter {
-                !$0.content.contains("Speaker identity for this request is")
-            }
+            history = updated
 
             if history.count > Config.maxHistoryMessages + 1 {
                 history.removeSubrange(
@@ -113,5 +115,18 @@ extension VoiceAssistant {
         }
 
         return result.reply
+    }
+
+    private func addressReminderStatus(_ result: ConversationResult) -> String? {
+        struct AddressReminderResult: Decodable { let status: String? }
+
+        for (call, resultText) in zip(result.toolCalls, result.toolResults) {
+            guard call.function.name == "address_reminder",
+                let data = resultText.data(using: .utf8),
+                let decoded = try? JSONDecoder().decode(AddressReminderResult.self, from: data)
+            else { continue }
+            return decoded.status
+        }
+        return nil
     }
 }

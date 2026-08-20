@@ -35,12 +35,14 @@ enum ConversationEngineError: LocalizedError, Equatable {
 
         case .reminderAcknowledgementNotInvoked:
             return """
-                The model claimed an active reminder was acknowledged without a \
-                successful acknowledge_reminder call.
+                The tool loop exhausted its steps without an address_reminder \
+                call while a reminder was active.
                 """
         }
     }
 }
+
+private let reminderAddressTool = "address_reminder"
 
 final class ConversationEngine: @unchecked Sendable {
     private let llm: any LLMServing
@@ -106,40 +108,20 @@ final class ConversationEngine: @unchecked Sendable {
     ) async throws -> ConversationResult {
         var messages = history
         var durableMessages = history
-        var transientInstructions = [String]()
-
+        var boundary: [String] = []
         if let speakerInstruction {
-            transientInstructions.append(speakerInstruction)
+            boundary.append(speakerInstruction)
         }
-
-        if !transientInstructions.isEmpty {
-            let systemPrefixCount = messages.prefix {
-                $0.role == "system"
-            }.count
-
-            messages.insert(
-                Message(
-                    role: "system",
-                    content: transientInstructions.joined(separator: "\n\n")
-                ),
-                at: systemPrefixCount
-            )
-        }
-
-        var boundary = trailingInstructions
         if let activeReminderText {
-            boundary.insert(
-                SystemPrompts.activeReminderResponseInstruction,
-                at: 0
-            )
-            boundary.insert(
+            boundary.append(SystemPrompts.activeReminderResponseInstruction)
+            boundary.append(
                 """
                 Active reminder text:
                 \(activeReminderText)
-                """,
-                at: 1
+                """
             )
         }
+        boundary.append(contentsOf: trailingInstructions)
 
         let userMessage = Message(role: "user", content: userText)
         messages.append(userMessage)
@@ -162,16 +144,18 @@ final class ConversationEngine: @unchecked Sendable {
         var successfulToolNames: [String] = []
         var toolCalls: [ToolCall] = []
         var toolResults: [String] = []
-        var activeReminderAcknowledged = false
-        var retriedReminderAcknowledgement = false
+        var reminderAddressed = activeReminderText == nil
 
         for step in 0..<maxSteps {
             try Task.checkCancellation()
             let passStart = CACurrentMediaTime()
             var firstTokenLogged = false
+            let toolChoice: LLMClient.ToolChoice? =
+                reminderAddressed ? nil : .function(name: reminderAddressTool)
             let assistantMessage = try await llm.chatStream(
                 messages: messages,
                 tools: tools,
+                toolChoice: toolChoice,
                 onDelta: { delta in
                     if !firstTokenLogged {
                         firstTokenLogged = true
@@ -217,10 +201,9 @@ final class ConversationEngine: @unchecked Sendable {
                     Log.toolResult(call.function.name, result)
                     if toolSucceeded(result) {
                         successfulToolNames.append(call.function.name)
-
-                        if call.function.name == "acknowledge_reminder" {
-                            activeReminderAcknowledged = true
-                        }
+                    }
+                    if call.function.name == reminderAddressTool {
+                        reminderAddressed = true
                     }
                     let toolHistoryMessage = Message(
                         role: "tool",
@@ -251,35 +234,6 @@ final class ConversationEngine: @unchecked Sendable {
                 continue
             }
 
-            if activeReminderText != nil,
-                !activeReminderAcknowledged,
-                claimsReminderAcknowledgement(reply)
-            {
-                if retriedReminderAcknowledgement {
-                    throw ConversationEngineError
-                        .reminderAcknowledgementNotInvoked
-                }
-
-                retriedReminderAcknowledgement = true
-
-                let validationMessage = Message(
-                    role: "user",
-                    content: """
-                        Validation failure: you claimed the active reminder was
-                        completed, dismissed, or acknowledged without a successful
-                        acknowledge_reminder tool call.
-
-
-                        Invoke acknowledge_reminder now if the user completed or
-                        dismissed it. Otherwise speak naturally without claiming
-                        completion.
-                        """
-                )
-                messages.append(validationMessage)
-                durableMessages.append(validationMessage)
-                continue
-            }
-
             return ConversationResult(
                 reply: reply,
                 toolCalls: toolCalls,
@@ -290,6 +244,10 @@ final class ConversationEngine: @unchecked Sendable {
             )
         }
 
+        if !reminderAddressed {
+            throw ConversationEngineError.reminderAcknowledgementNotInvoked
+        }
+
         throw ConversationEngineError.toolLoopExceeded
     }
 
@@ -298,25 +256,5 @@ final class ConversationEngine: @unchecked Sendable {
             ToolSuccessResponse.self,
             from: Data(result.utf8)
         ))?.ok == true
-    }
-
-    private func claimsReminderAcknowledgement(
-        _ text: String
-    ) -> Bool {
-        let normalized = normalize(text)
-
-        return [
-            "has been marked complete",
-            "is marked complete",
-            "marked that reminder complete",
-            "marked the reminder complete",
-            "marked it complete",
-            "reminder is complete",
-            "reminder has been completed",
-            "reminder has been marked complete",
-            "cancelled the reminder",
-            "canceled the reminder",
-            "dismissed the reminder",
-        ].contains(where: normalized.contains)
     }
 }

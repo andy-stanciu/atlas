@@ -36,10 +36,10 @@ CUES = {
     "tool_schedule_reminder": "Setting that reminder.",
     "tool_list_reminders": "Checking your reminders.",
     "tool_cancel_reminder": "Canceling that reminder.",
-    "tool_acknowledge_reminder": "Marking that as done.",
-    "tool_schedule_sequence": "Setting that up for you.",
-    "tool_list_sequences": "Checking your scheduled routines.",
-    "tool_cancel_sequence": "Canceling that.",
+    "tool_address_reminder": "Addressing that reminder.",
+    "tool_schedule_sequence": "Scheduling that sequence.",
+    "tool_list_sequences": "Checking your sequences.",
+    "tool_cancel_sequence": "Canceling that sequence.",
 }
 
 

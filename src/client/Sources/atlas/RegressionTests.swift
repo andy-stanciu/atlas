@@ -385,7 +385,7 @@ extension RegressionCase {
                 "schedule_reminder",
                 "list_reminders",
                 "cancel_reminder",
-                "acknowledge_reminder",
+                "address_reminder",
                 "schedule_sequence",
                 "list_sequences",
                 "cancel_sequence",
@@ -403,7 +403,7 @@ extension RegressionCase {
                 "schedule_reminder",
                 "list_reminders",
                 "cancel_reminder",
-                "acknowledge_reminder",
+                "address_reminder",
                 "schedule_sequence",
                 "list_sequences",
                 "cancel_sequence",
@@ -421,7 +421,7 @@ extension RegressionCase {
                 "schedule_reminder",
                 "list_reminders",
                 "cancel_reminder",
-                "acknowledge_reminder",
+                "address_reminder",
                 "schedule_sequence",
                 "list_sequences",
                 "cancel_sequence",
@@ -439,7 +439,7 @@ extension RegressionCase {
                 "schedule_reminder",
                 "list_reminders",
                 "cancel_reminder",
-                "acknowledge_reminder",
+                "address_reminder",
                 "schedule_sequence",
                 "list_sequences",
                 "cancel_sequence",
@@ -454,7 +454,10 @@ extension RegressionCase {
             kind: .activeReminder,
             prompt: "I finished it.",
             activeReminderText: "Take out the trash.",
-            requiredTools: ["acknowledge_reminder"],
+            requiredTools: ["address_reminder"],
+            expectedArgumentValues: [
+                "address_reminder": ["acknowledged": .bool(true)]
+            ],
             minimumCallCount: 1
         ),
 
@@ -463,8 +466,11 @@ extension RegressionCase {
             kind: .activeReminder,
             prompt: "I am still working on it.",
             activeReminderText: "Take out the trash.",
-            forbiddenTools: ["acknowledge_reminder"],
-            maximumCallCount: 0
+            requiredTools: ["address_reminder"],
+            expectedArgumentValues: [
+                "address_reminder": ["acknowledged": .bool(false)]
+            ],
+            minimumCallCount: 1
         ),
 
         .init(
@@ -472,7 +478,10 @@ extension RegressionCase {
             kind: .activeReminder,
             prompt: "Please dismiss that reminder.",
             activeReminderText: "Take out the trash.",
-            requiredTools: ["acknowledge_reminder"],
+            requiredTools: ["address_reminder"],
+            expectedArgumentValues: [
+                "address_reminder": ["acknowledged": .bool(true)]
+            ],
             minimumCallCount: 1
         ),
 
@@ -509,7 +518,7 @@ extension RegressionCase {
                 "schedule_reminder",
                 "list_reminders",
                 "cancel_reminder",
-                "acknowledge_reminder",
+                "address_reminder",
                 "schedule_sequence",
                 "list_sequences",
                 "cancel_sequence",
@@ -723,8 +732,15 @@ private actor RegressionToolServer: ToolServing {
         case "cancel_reminder":
             return #"{"ok":true,"cancelled":true}"#
 
-        case "acknowledge_reminder":
-            return #"{"ok":true,"acknowledged":true}"#
+        case "address_reminder":
+            let acknowledged: Bool = {
+                if case .bool(let value) = call.function.arguments["acknowledged"] {
+                    return value
+                }
+                return false
+            }()
+            let status = acknowledged ? "acknowledged" : "still_active"
+            return #"{"ok":true,"status":"\#(status)"}"#
 
         case "schedule_sequence":
             return #"{"ok":true,"id":201}"#
@@ -848,11 +864,20 @@ private enum RegressionTools {
         ),
 
         tool(
-            name: "acknowledge_reminder",
+            name: "address_reminder",
             description: """
-                Stop the currently repeating reminder. Call when the user
-                confirms, dismisses, or completes it.
-                """
+                Report whether the user is done with the active reminder. Call
+                this exactly once whenever a reminder is active.
+                """,
+            required: ["acknowledged"],
+            properties: [
+                "acknowledged": ToolProperty(
+                    type: "boolean",
+                    description: "True if done, false if not yet done.",
+                    enumValues: nil,
+                    items: nil
+                )
+            ]
         ),
 
         tool(
