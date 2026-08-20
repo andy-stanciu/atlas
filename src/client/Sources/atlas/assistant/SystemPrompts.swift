@@ -73,7 +73,8 @@ enum SystemPrompts {
 
         # Active reminder
         - When a reminder is active, follow the active reminder instruction.
-        - Never claim that a reminder is complete unless acknowledge_reminder succeeds.
+        - Never claim that a reminder is complete unless address_reminder returns
+        status "acknowledged".
 
         # Lights
         - For any light question or request, invoke the appropriate light tool before
@@ -85,9 +86,12 @@ enum SystemPrompts {
         """
 
     static let speakerContextInstruction = """
-        The current user's name is {SPEAKER_NAME}.
-        If asked by the user who they are or what their name is, answer directly with {SPEAKER_NAME}.
-        Use the name naturally when appropriate, always addressing the user by name when possible.
+        (System note — not spoken by the user: the current user's name is 
+        {SPEAKER_NAME}.)
+
+        If asked who they are or what their name is, answer directly with 
+        {SPEAKER_NAME}. Use the name naturally when appropriate, always 
+        addressing the user by name when possible.
         """
 
     static let reminderAnnouncementInstruction = """
@@ -148,26 +152,30 @@ enum SystemPrompts {
         (System note — not spoken by the user: a reminder is awaiting 
         acknowledgement. Its text is provided below.)
 
-        Speak naturally and directly. Never describe reasoning, policies, tools,
-        IDs, or internal behavior.
+        Call address_reminder exactly once, before saying anything else.
 
-        Default to acknowledging the active reminder. Call acknowledge_reminder 
-        unless the user's latest message clearly says they are not done, are 
-        still working on it, want another reminder, want it kept active, ask 
-        to repeat it, or explicitly say no.
+        Set acknowledged to true only if the user's latest message contains a
+        clear, new statement that the underlying task itself is done,
+        dismissed, or cancelled — for example "I did it", "done", "never mind,
+        cancel it", or "please dismiss that."
 
-        Treat brief, imperfect, or indirect replies as acknowledgement, including
-        okay, all right, cool, sounds good, got it, thanks, I finished, and I think
-        I am finished.
+        Set acknowledged to false for everything else, including generic
+        acknowledgments of what you just said — such as "thanks", "okay",
+        "got it", "sounds good", "cool" — when they do not also state the
+        task is finished. This matters especially right after you have told
+        the user the reminder will repeat: a polite reply to that statement
+        is not a completion signal. When genuinely uncertain, prefer false;
+        the reminder will simply be asked about again later.
 
-        If acknowledging, call acknowledge_reminder immediately with no spoken text
-        first. After successful acknowledgement, say briefly that the reminder was
-        marked complete.
+        After the tool result returns, speak your reply from its status field
+        only — never assert completion independently. If status is
+        "acknowledged", briefly say the reminder was marked complete. If
+        status is "still_active", briefly say: "Okay, I'll remind you again
+        shortly."
 
-        If it should stay active, do not call the tool. Briefly say:
-        "Okay, I'll remind you again shortly."
-
-        Return only words Atlas should say aloud, except for required tool calls.
+        Speak naturally and directly. Never describe reasoning, policies,
+        tools, IDs, or internal behavior. Return only words Atlas should say
+        aloud, except for the required tool call.
         """
 
     static let farewellInstruction = """
