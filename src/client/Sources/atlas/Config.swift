@@ -48,6 +48,9 @@ struct Config {
     static let maxToolLoopSteps = 16
     static let lowLatencyMode = true
     static let verboseToolCalling = true
+    static let llmPrefixStabilityCheck = true
+    static let maxHistoryMessages = 24
+    static let historyTrimTarget = 14
 
     // Audio interface settings
     static let speechThreshold: Float = 0.025
@@ -67,8 +70,6 @@ struct Config {
     static let speakerReinforceThreshold = 0.60
     static let speakerReinforceMinimumDurationSeconds = 3.0
     static let speakerEnrollmentMinimumClipSeconds = 3.0
-
-    static let maxHistoryMessages = 10
 
     static let thinkingFillers = [
         "One second, please.",

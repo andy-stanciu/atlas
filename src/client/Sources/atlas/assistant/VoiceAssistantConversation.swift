@@ -3,6 +3,7 @@ import Foundation
 extension VoiceAssistant {
 
     func beginConversation() {
+        LLMPrefixStability.reset()
         lock.withLock {
             shouldEndConversationAfterSpeech = false
             conversationActive = true
@@ -20,6 +21,7 @@ extension VoiceAssistant {
     }
 
     func beginReminderConversation() {
+        LLMPrefixStability.reset()
         lock.withLock {
             shouldEndConversationAfterSpeech = false
             conversationActive = true
@@ -87,6 +89,7 @@ extension VoiceAssistant {
         }
 
         if didEnd {
+            LLMPrefixStability.reset()
             clearTools()
             soundEffects.play("shutdown")
             Log.blank()

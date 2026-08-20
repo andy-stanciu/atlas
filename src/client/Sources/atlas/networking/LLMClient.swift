@@ -171,6 +171,10 @@ final class LLMClient: @unchecked Sendable {
             )
         )
 
+        if let body = request.httpBody {
+            LLMPrefixStability.check(body)
+        }
+
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
 
         guard let http = response as? HTTPURLResponse,

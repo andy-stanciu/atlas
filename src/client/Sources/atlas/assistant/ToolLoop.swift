@@ -99,8 +99,9 @@ extension VoiceAssistant {
 
             if history.count > Config.maxHistoryMessages + 1 {
                 history.removeSubrange(
-                    1..<(history.count - Config.maxHistoryMessages)
+                    1..<(history.count - Config.historyTrimTarget)
                 )
+                LLMPrefixStability.reset()
             }
         }
 
