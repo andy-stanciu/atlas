@@ -10,8 +10,6 @@ final class SpeakerEnrollmentCoordinator {
 
     private var nameRequestPending = false
 
-    private var nameRequestTask: Task<String?, Never>?
-
     var hasPendingNameRequest: Bool {
         nameRequestPending && !isAwaitingName
     }
@@ -67,27 +65,11 @@ final class SpeakerEnrollmentCoordinator {
         }
     }
 
-    func beginNameRequest() async -> String? {
-        guard nameRequestPending, !isAwaitingName else {
-            return nil
-        }
-
-        var generated: String?
-        if let task = nameRequestTask {
-            generated = await task.value
-            nameRequestTask = nil
-        }
-
-        let prompt: String
-        if let generated, !generated.isEmpty {
-            prompt = generated
-        } else {
-            prompt = Config.speakerNameRequestFallback
-        }
-
+    func beginNameRequest() -> Bool {
+        guard nameRequestPending, !isAwaitingName else { return false }
         nameRequestPending = false
         isAwaitingName = true
-        return prompt
+        return true
     }
 
     func rescheduleNameRequest() {
@@ -100,7 +82,6 @@ final class SpeakerEnrollmentCoordinator {
 
     func resolveNameResponse(userText: String) async -> String {
         isAwaitingName = false
-        nameRequestTask = nil
 
         let extractedName = try? await llm.extractSpeakerName(from: userText)
 
@@ -132,13 +113,6 @@ final class SpeakerEnrollmentCoordinator {
             return
         }
         nameRequestPending = true
-        nameRequestTask = Task { [llm] in
-            let generated = try? await llm.generateSpeakerNameRequest()
-            guard let generated, !generated.isEmpty else {
-                return nil
-            }
-            return generated
-        }
     }
 
     private func enrollAnonymously(wavURL: URL) {

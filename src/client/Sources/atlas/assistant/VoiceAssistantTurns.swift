@@ -160,7 +160,7 @@ extension VoiceAssistant {
             userText: userText,
             normalizedText: normalizedText
         )
-        let closing = evaluation.result
+        let closing = startedNewConversation ? .none : evaluation.result
         let shouldRequestName = await nameRequestPending
         var acknowledgedReminder = false
         if closing != .none, activeReminder != nil {
@@ -168,7 +168,18 @@ extension VoiceAssistant {
                 await notificationCoordinator?.acknowledgeActiveReminder() ?? false
         }
         if closing == .closeNow, !acknowledgedReminder {
-            try await closeConversation(speaker: speakerIdentity)
+            beginGenerationTurn(
+                userText: userText,
+                speakerIdentity: speakerIdentity,
+                speakerInstruction: speakerIdentity.flatMap {
+                    self.speakerContextInstruction(for: $0)
+                },
+                trailingInstructions: [SystemPrompts.farewellInstruction],
+                playThinkingFiller: false,
+                onCompletion: { [weak self] in
+                    self?.scheduleConversationEndAfterSpeech()
+                }
+            )
             return
         }
         var onCompletion: (@Sendable () async -> Void)?
@@ -253,6 +264,7 @@ extension VoiceAssistant {
         speakerIdentity: SpeakerIdentity?,
         speakerInstruction: String?,
         trailingInstructions: [String] = [],
+        persistAssistantReply: Bool = true,
         playThinkingFiller: Bool,
         onCompletion: (@Sendable () async -> Void)? = nil
     ) {
@@ -291,6 +303,7 @@ extension VoiceAssistant {
                     turnID: turnID,
                     speakerInstruction: speakerInstruction,
                     trailingInstructions: trailingInstructions,
+                    persistAssistantReply: persistAssistantReply
                 ) { [weak self] sentence in
                     guard let self else {
                         return
@@ -377,23 +390,19 @@ extension VoiceAssistant {
             speakerEnrollment.rescheduleNameRequest()
             return
         }
-        guard let prompt = await speakerEnrollment.beginNameRequest() else {
+        guard speakerEnrollment.beginNameRequest() else {
             return
         }
 
-        Log.transcript("Atlas: \(prompt)")
-        let turnID = UUID()
-        lock.withLock {
-            activeTurnID = turnID
-            activeTurnText = nil
-        }
-
-        try? await playback.queueAssistantReply(
-            prompt,
-            for: turnID,
-            isCurrentTurn: { [weak self] id in
-                self?.isCurrentTurn(id) ?? false
-            }
+        // Proactive turn: no user utterance exists, so the synthetic user
+        // message carries the context and the instruction rides trailing.
+        beginGenerationTurn(
+            userText: "(Proactive turn; the user has not spoken.)",
+            speakerIdentity: nil,
+            speakerInstruction: nil,
+            trailingInstructions: [SystemPrompts.speakerNameRequestInstruction],
+            persistAssistantReply: false,
+            playThinkingFiller: false
         )
     }
 
@@ -419,55 +428,5 @@ extension VoiceAssistant {
                 of: "{SPEAKER_NAME}",
                 with: speaker.displayName
             )
-    }
-
-    func speakerFarewellInstruction(
-        for speaker: SpeakerIdentity?
-    ) -> String? {
-        guard let speaker, !speaker.anonymous else {
-            return nil
-        }
-
-        return SystemPrompts.speakerFarewellInstruction
-            .replacingOccurrences(
-                of: "{SPEAKER_NAME}",
-                with: speaker.displayName
-            )
-    }
-
-    func closeConversation(
-        speaker: SpeakerIdentity? = nil
-    ) async throws {
-        let farewellInstruction = speakerFarewellInstruction(
-            for: speaker
-        )
-
-        let farewell = try await llm.generateFarewell(
-            speakerInstruction: farewellInstruction
-        )
-
-        guard !farewell.isEmpty else {
-            endConversation()
-            return
-        }
-
-        Log.transcript("Atlas: \(farewell)")
-        let turnID = UUID()
-
-        lock.withLock {
-            activeTurnID = turnID
-            activeTurnText = nil
-            activeTurnSpeaker = speaker
-        }
-
-        scheduleConversationEndAfterSpeech()
-
-        try await playback.queueAssistantReply(
-            farewell,
-            for: turnID,
-            isCurrentTurn: { [weak self] id in
-                self?.isCurrentTurn(id) ?? false
-            }
-        )
     }
 }

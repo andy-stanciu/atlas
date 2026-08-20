@@ -57,25 +57,6 @@ final class LLMClient: @unchecked Sendable {
         let chat_template_kwargs: [String: Bool]
     }
 
-    private struct WireResponse: Decodable {
-        struct Choice: Decodable {
-            struct ResponseMessage: Decodable {
-                struct ResponseToolCall: Decodable {
-                    struct ResponseFunction: Decodable {
-                        let name: String
-                        let arguments: String
-                    }
-                    let id: String?
-                    let function: ResponseFunction
-                }
-                let content: String?
-                let tool_calls: [ResponseToolCall]?
-            }
-            let message: ResponseMessage
-        }
-        let choices: [Choice]
-    }
-
     private struct WireStreamChunk: Decodable {
         struct Choice: Decodable {
             struct Delta: Decodable {
@@ -98,59 +79,11 @@ final class LLMClient: @unchecked Sendable {
 
     // MARK: - Core chat API
 
-    func chat(
-        messages: [Message],
-        tools: [ToolDefinition],
-        temperature: Double = Config.llmDefaultTemperature
-    ) async throws -> Message {
-        let data = try await send(
-            messages: messages,
-            tools: tools,
-            temperature: temperature
-        )
-
-        let response: WireResponse
-        do {
-            response = try JSONDecoder().decode(WireResponse.self, from: data)
-        } catch {
-            Log.system(
-                "LLM response decode failed: "
-                    + String(decoding: data, as: UTF8.self)
-            )
-            throw error
-        }
-
-        guard let choice = response.choices.first else {
-            throw NSError(
-                domain: "LLM",
-                code: 3,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "LLM returned no choices."
-                ]
-            )
-        }
-
-        return Message(
-            role: "assistant",
-            content: choice.message.content ?? "",
-            toolCalls: choice.message.tool_calls?.enumerated().map { index, call in
-                ToolCall(
-                    id: call.id ?? "call_\(index)",
-                    type: "function",
-                    function: ToolFunctionCall(
-                        index: index,
-                        name: call.function.name,
-                        arguments: Self.parseArguments(call.function.arguments)
-                    )
-                )
-            }
-        )
-    }
-
     func chatStream(
         messages: [Message],
         tools: [ToolDefinition],
         temperature: Double = Config.llmDefaultTemperature,
+        prefixTracked: Bool = true,
         onDelta: (String) -> Void
     ) async throws -> Message {
         var request = try makeRequest(
@@ -171,7 +104,7 @@ final class LLMClient: @unchecked Sendable {
             )
         )
 
-        if let body = request.httpBody {
+        if prefixTracked, let body = request.httpBody {
             LLMPrefixStability.check(body)
         }
 
@@ -277,7 +210,7 @@ final class LLMClient: @unchecked Sendable {
             instruction = SystemPrompts.announcementInstruction
         }
 
-        let response = try await chat(
+        let response = try await chatStream(
             messages: [
                 Message(
                     role: "system",
@@ -293,6 +226,8 @@ final class LLMClient: @unchecked Sendable {
                 ),
             ],
             tools: [],
+            prefixTracked: false,
+            onDelta: { _ in }
         )
 
         let speech = response.content.trimmingCharacters(
@@ -310,66 +245,8 @@ final class LLMClient: @unchecked Sendable {
         return speech
     }
 
-    func generateFarewell(
-        speakerInstruction: String? = nil
-    ) async throws -> String {
-        var messages = [
-            Message(
-                role: "system",
-                content: SystemPrompts.mainSystemPrompt
-            ),
-            Message(
-                role: "system",
-                content: SystemPrompts.farewellInstruction
-            ),
-        ]
-
-        if let speakerInstruction {
-            messages.append(
-                Message(
-                    role: "system",
-                    content: speakerInstruction
-                )
-            )
-        }
-
-        messages.append(
-            Message(role: "user", content: "Goodbye, Atlas.")
-        )
-
-        let response = try await chat(
-            messages: messages,
-            tools: [],
-            temperature: Config.llmConversationalTemperature
-        )
-
-        return response.content.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-    }
-
-    func generateSpeakerNameRequest() async throws -> String {
-        let response = try await chat(
-            messages: [
-                Message(role: "system", content: SystemPrompts.mainSystemPrompt),
-                Message(
-                    role: "system",
-                    content: SystemPrompts.speakerNameRequestInstruction
-                ),
-                Message(
-                    role: "user",
-                    content: "You don't recognize this speaker's voice."
-                ),
-            ],
-            tools: [],
-            temperature: Config.llmConversationalTemperature
-        )
-
-        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     func extractSpeakerName(from utterance: String) async throws -> String? {
-        let response = try await chat(
+        let response = try await chatStream(
             messages: [
                 Message(
                     role: "system",
@@ -379,7 +256,9 @@ final class LLMClient: @unchecked Sendable {
             ],
             tools: [],
             // extraction should be temperature 0
-            temperature: 0
+            temperature: 0,
+            prefixTracked: false,
+            onDelta: { _ in }
         )
 
         let trimmed = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -389,40 +268,6 @@ final class LLMClient: @unchecked Sendable {
         }
 
         return trimmed
-    }
-
-    func generateEnrollmentAcknowledgement(name: String) async throws -> String {
-        let response = try await chat(
-            messages: [
-                Message(role: "system", content: SystemPrompts.mainSystemPrompt),
-                Message(
-                    role: "system",
-                    content: SystemPrompts.speakerEnrollmentAcknowledgementInstruction
-                ),
-                Message(role: "user", content: "My name is \(name)."),
-            ],
-            tools: [],
-            temperature: Config.llmConversationalTemperature
-        )
-
-        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    func generateEnrollmentDeclineAcknowledgement() async throws -> String {
-        let response = try await chat(
-            messages: [
-                Message(role: "system", content: SystemPrompts.mainSystemPrompt),
-                Message(
-                    role: "system",
-                    content: SystemPrompts.speakerEnrollmentDeclineInstruction
-                ),
-                Message(role: "user", content: "I'd rather not share my name."),
-            ],
-            tools: [],
-            temperature: Config.llmConversationalTemperature
-        )
-
-        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Internals
@@ -466,52 +311,6 @@ final class LLMClient: @unchecked Sendable {
             forHTTPHeaderField: "Content-Type"
         )
         return request
-    }
-
-    private func send(
-        messages: [Message],
-        tools: [ToolDefinition],
-        temperature: Double
-    ) async throws -> Data {
-        var request = try makeRequest(
-            messages: messages,
-            tools: tools,
-            temperature: temperature
-        )
-        request.httpBody = try makeCanonicalJSONEncoder().encode(
-            WireRequest(
-                model: Config.llmModel,
-                messages: Self.normalizeMessages(messages)
-                    .map(WireRequest.WireMessage.init),
-                tools: tools.isEmpty ? nil : tools,
-                temperature: temperature,
-                max_tokens: Config.llmMaxTokens,
-                stream: false,
-                chat_template_kwargs: ["enable_thinking": false]
-            )
-        )
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let http = response as? HTTPURLResponse,
-            (200...299).contains(http.statusCode)
-        else {
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            Log.system(
-                "LLM request failed. "
-                    + "HTTP \(statusCode). Response: "
-                    + String(decoding: data, as: UTF8.self)
-            )
-            throw NSError(
-                domain: "LLM",
-                code: 2,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "LLM request failed with HTTP \(statusCode)."
-                ]
-            )
-        }
-        return data
     }
 
     private static func parseArguments(_ raw: String) -> [String: JSONValue] {

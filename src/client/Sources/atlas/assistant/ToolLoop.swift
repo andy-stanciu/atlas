@@ -7,7 +7,8 @@ extension VoiceAssistant {
         turnID: UUID,
         speakerInstruction: String? = nil,
         trailingInstructions: [String] = [],
-        onSentence: @escaping (String) async throws -> Void,
+        persistAssistantReply: Bool = true,
+        onSentence: @escaping (String) async throws -> Void
     ) async throws -> String {
         let activeReminder = await notificationCoordinator?
             .acknowledgementEligibleReminderSnapshot()
@@ -91,9 +92,15 @@ extension VoiceAssistant {
                 return
             }
 
-            // Update history with the final messages from the conversation result,
-            // filtering out any messages that contain speaker identity information.
-            history = result.finalMessages.filter {
+            // Update history with the final messages from the conversation
+            // result. Proactive turns (no real user utterance) drop their
+            // synthetic reply — the next turn's real user message carries
+            // the conversational context instead.
+            var updated = result.finalMessages
+            if !persistAssistantReply, updated.last?.role == "assistant" {
+                updated.removeLast()
+            }
+            history = updated.filter {
                 !$0.content.contains("Speaker identity for this request is")
             }
 
