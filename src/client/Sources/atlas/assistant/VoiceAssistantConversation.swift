@@ -35,7 +35,6 @@ extension VoiceAssistant {
         Task { await prefetchTools() }
         Log.blank()
         Log.system("Atlas is listening for your reminder response.")
-        resetConversationTimeout()
     }
 
     func scheduleConversationEndAfterSpeech() {
