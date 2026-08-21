@@ -63,6 +63,13 @@ extension VoiceAssistant {
         )
     }
 
+    func handleWordReceived() {
+        guard lock.withLock({ conversationActive }) else {
+            return
+        }
+        resetConversationTimeout()
+    }
+
     func endConversation() {
         let didEnd = lock.withLock { () -> Bool in
             guard conversationActive else {

@@ -128,10 +128,6 @@ struct ToolExecutionRequest: Codable {
     let arguments: [String: JSONValue]
 }
 
-struct WhisperResponse: Codable {
-    let text: String
-}
-
 enum AssistantState: Equatable {
     case listening
     case recording
@@ -140,24 +136,6 @@ enum AssistantState: Equatable {
 }
 
 enum AtlasError: LocalizedError {
-    case toolRequiredButNotInvoked
-}
-
-struct ActionEnvelope: Decodable {
-    let decision: Decision
-    let speech: String
-    let calls: [ActionEnvelopeToolCall]
-
-    enum Decision: String, Decodable {
-        case respond
-        case clarify
-        case callTools = "call_tools"
-    }
-}
-
-struct ActionEnvelopeToolCall: Decodable {
-    let name: String
-    let arguments: [String: JSONValue]
 }
 
 enum SpeakerIdentificationStatus: String, Codable, Sendable {

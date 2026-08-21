@@ -41,7 +41,6 @@ extension VoiceAssistant {
         var completedRecording: Data?
         var completedSampleRate: Double?
         var shouldStopPlayback = false
-        var shouldCancelTimeout = false
 
         guard lock.try() else {
             return
@@ -62,7 +61,6 @@ extension VoiceAssistant {
                 recording = joinedPreRoll()
                 silenceFrames = 0
                 clearPreRoll()
-                shouldCancelTimeout = conversationActive
                 beginRecognizerSession(preRoll: recording)
                 Log.blank()
                 Log.system("Listening...", terminator: "")
@@ -160,10 +158,6 @@ extension VoiceAssistant {
 
         case .processing:
             break
-        }
-
-        if shouldCancelTimeout {
-            cancelConversationTimeout()
         }
 
         if shouldStopPlayback {

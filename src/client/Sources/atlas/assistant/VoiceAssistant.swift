@@ -116,9 +116,10 @@ final class VoiceAssistant {
         let lock = self.lock
         sttClient = STTClient(
             onPauseScoreUpdate: { [weak self] score in
-                lock.withLock {
-                    self?.currentPauseScore = score
-                }
+                lock.withLock { self?.currentPauseScore = score }
+            },
+            onWordReceived: { [weak self] in
+                self?.handleWordReceived()
             }
         )
 

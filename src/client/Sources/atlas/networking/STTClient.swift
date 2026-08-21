@@ -30,6 +30,7 @@ actor STTClient {
     private let serverURL: URL
     private let apiKey: String
     private let onPauseScoreUpdate: (@Sendable (Double) -> Void)?
+    private let onWordReceived: (@Sendable () -> Void)?
 
     private var task: URLSessionWebSocketTask?
     private var receiveLoop: Task<Void, Never>?
@@ -46,11 +47,13 @@ actor STTClient {
         host: String = Config.sttServerHost,
         port: Int = Config.sttServerPort,
         apiKey: String = Config.sttServerAPIKey,
-        onPauseScoreUpdate: (@Sendable (Double) -> Void)? = nil
+        onPauseScoreUpdate: (@Sendable (Double) -> Void)? = nil,
+        onWordReceived: (@Sendable () -> Void)? = nil
     ) {
         self.serverURL = URL(string: "ws://\(host):\(port)/api/asr-streaming")!
         self.apiKey = apiKey
         self.onPauseScoreUpdate = onPauseScoreUpdate
+        self.onWordReceived = onWordReceived
     }
 
     func verifyReachable() async throws {
@@ -173,6 +176,7 @@ actor STTClient {
                 if case .string(let text) = fields["text"] ?? .null {
                     transcript += (transcript.isEmpty ? "" : " ") + text
                     lastWordReceivedAt = CFAbsoluteTimeGetCurrent()
+                    onWordReceived?()
                 }
             case "Step":
                 guard case .array(let prs) = fields["prs"] ?? .null, prs.count >= 3 else { break }
