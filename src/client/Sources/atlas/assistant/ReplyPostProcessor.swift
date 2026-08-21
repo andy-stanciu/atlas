@@ -40,25 +40,17 @@ enum ReplyPostProcessor {
     ]
 
     private static let timePattern = try! NSRegularExpression(
-        pattern: #"\b(\d{1,2}):(\d{2})\s*([AaPp]\.?[Mm]\.?)?"#
+        pattern: #"\b(\d{1,2})(?::(\d{2}))?\s*([AaPp]\.?[Mm]\.?)?"#
     )
 
-    static func process(_ sentence: String, hasPriorSentence: Bool) -> String? {
-        let lowered = sentence.lowercased()
-        if hasPriorSentence,
-            let phrase = followUpPhrases.first(where: { lowered.contains($0) })
-        {
-            Log.postprocess("dropped (follow-up phrase '\(phrase)'): \(sentence)")
-            return nil
-        }
-        guard isSpeakable(sentence) else {
-            Log.postprocess("dropped (unspeakable characters): \(sentence)")
-            return nil
-        }
-        return rewriteTimes(in: sentence)
+    private static func splitIntoUnits(_ text: String) -> [String] {
+        text.components(separatedBy: "\n")
+            .flatMap(splitOnSentenceTerminators)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
-    static func processReply(_ text: String) -> String {
+    private static func splitOnSentenceTerminators(_ text: String) -> [String] {
         var pieces: [String] = []
         var start = text.startIndex
         var index = text.startIndex
@@ -76,18 +68,48 @@ enum ReplyPostProcessor {
         if start < text.endIndex {
             pieces.append(String(text[start...]))
         }
+        return pieces
+    }
 
-        var kept: [String] = []
-        for piece in pieces {
-            let trimmed = piece.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else {
-                continue
+    private static func containsFollowUpPhrase(_ unit: String) -> Bool {
+        let lowered = unit.lowercased()
+        return followUpPhrases.contains { lowered.contains($0) }
+    }
+
+    static func process(_ sentence: String, hasPriorSentence: Bool) -> String? {
+        var units = splitIntoUnits(sentence)
+        guard !units.isEmpty else {
+            return nil
+        }
+
+        units = units.filter { unit in
+            guard isSpeakable(unit) else {
+                Log.postprocess("dropped (unspeakable characters): \(unit)")
+                return false
             }
-            if let processed = process(trimmed, hasPriorSentence: !kept.isEmpty) {
-                kept.append(processed)
+            return true
+        }
+
+        if let matchIndex = units.lastIndex(where: containsFollowUpPhrase) {
+            let hasRealPriorContent = hasPriorSentence || matchIndex > 0
+            if hasRealPriorContent {
+                let dropped = units[matchIndex...]
+                Log.postprocess(
+                    "dropped trailing follow-up: \(dropped.joined(separator: " "))"
+                )
+                units = Array(units[..<matchIndex])
             }
         }
-        return kept.joined(separator: " ")
+
+        guard !units.isEmpty else {
+            return nil
+        }
+
+        return rewriteTimes(in: units.joined(separator: "\n"))
+    }
+
+    static func processReply(_ text: String) -> String {
+        process(text, hasPriorSentence: false) ?? ""
     }
 
     private static func isSpeakable(_ text: String) -> Bool {
@@ -142,31 +164,54 @@ enum ReplyPostProcessor {
         )
 
         for match in matches.reversed() {
-            guard let hourRange = Range(match.range(at: 1), in: result),
-                let minuteRange = Range(match.range(at: 2), in: result),
-                let hour = Int(result[hourRange]),
-                let minute = Int(result[minuteRange]),
-                hour <= 24, minute <= 59,
+            let hourRange = match.range(at: 1)
+            let minuteRange = match.range(at: 2)
+            let meridiemRange = match.range(at: 3)
+
+            guard let hourSwiftRange = Range(hourRange, in: result),
+                let hour = Int(result[hourSwiftRange]),
+                hour <= 24,
                 let fullRange = Range(match.range, in: result)
             else {
                 continue
             }
 
-            var meridiem: String? = nil
-            if let meridiemRange = Range(match.range(at: 3), in: result) {
-                meridiem = String(result[meridiemRange])
-                    .uppercased()
-                    .filter(\.isLetter)
+            guard
+                minuteRange.location != NSNotFound
+                    || meridiemRange.location != NSNotFound
+            else {
+                continue
             }
 
-            result = result.replacingCharacters(
-                in: fullRange,
-                with: speakableTime(
-                    hour: hour,
-                    minute: minute,
-                    meridiem: meridiem
-                )
+            var minute = 0
+            if let minuteSwiftRange = Range(minuteRange, in: result) {
+                guard let parsedMinute = Int(result[minuteSwiftRange]),
+                    parsedMinute <= 59
+                else {
+                    continue
+                }
+                minute = parsedMinute
+            }
+
+            var meridiem: String?
+            var restoreTerminalPeriod = false
+            if let meridiemSwiftRange = Range(meridiemRange, in: result) {
+                let raw = String(result[meridiemSwiftRange])
+                restoreTerminalPeriod =
+                    raw.hasSuffix(".") && fullRange.upperBound == result.endIndex
+                meridiem = raw.uppercased().filter(\.isLetter)
+            }
+
+            var replacement = speakableTime(
+                hour: hour,
+                minute: minute,
+                meridiem: meridiem
             )
+            if restoreTerminalPeriod {
+                replacement += "."
+            }
+
+            result = result.replacingCharacters(in: fullRange, with: replacement)
         }
 
         return result
