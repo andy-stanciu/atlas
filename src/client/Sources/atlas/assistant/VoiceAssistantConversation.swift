@@ -14,6 +14,7 @@ extension VoiceAssistant {
                 Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
+        PersistentLog.beginConversation()
         Task { await prefetchTools() }
         soundEffects.play("startup")
         Log.blank()
@@ -32,6 +33,7 @@ extension VoiceAssistant {
                 Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
+        PersistentLog.beginConversation()
         Task { await prefetchTools() }
         Log.blank()
         Log.system("Atlas is listening for your reminder response.")

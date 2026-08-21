@@ -2,6 +2,12 @@ import Foundation
 import QuartzCore
 
 extension VoiceAssistant {
+    struct StreamedTurnResult {
+        let reply: String
+        let toolCalls: [ToolCall]
+        let toolResults: [String]
+    }
+
     func streamLLM(
         _ userText: String,
         turnID: UUID,
@@ -9,7 +15,7 @@ extension VoiceAssistant {
         trailingInstructions: [String] = [],
         persistAssistantReply: Bool = true,
         onSentence: @escaping (String) async throws -> Void
-    ) async throws -> String {
+    ) async throws -> StreamedTurnResult {
         let activeReminder = await notificationCoordinator?
             .acknowledgementEligibleReminderSnapshot()
 
@@ -114,7 +120,11 @@ extension VoiceAssistant {
             }
         }
 
-        return result.reply
+        return StreamedTurnResult(
+            reply: result.reply,
+            toolCalls: result.toolCalls,
+            toolResults: result.toolResults
+        )
     }
 
     private func addressReminderStatus(_ result: ConversationResult) -> String? {

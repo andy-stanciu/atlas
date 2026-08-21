@@ -105,6 +105,11 @@ extension VoiceAssistant {
             cancelConversationTimeout()
         }
 
+        let logHandle = PersistentLog.beginTurn()
+        if let logHandle {
+            PersistentLog.saveSpeech(logHandle, wavURL: wavURL, transcript: transcript)
+        }
+
         let speakerResponse: SpeakerIdentificationResponse?
         do {
             speakerResponse = try await timed("Speaker ID") {
@@ -144,7 +149,8 @@ extension VoiceAssistant {
                 speakerIdentity: speakerIdentity,
                 speakerInstruction: nil,
                 trailingInstructions: [instruction],
-                playThinkingFiller: false
+                playThinkingFiller: false,
+                logHandle: logHandle
             )
 
             return
@@ -176,6 +182,7 @@ extension VoiceAssistant {
                 },
                 trailingInstructions: [SystemPrompts.farewellInstruction],
                 playThinkingFiller: false,
+                logHandle: logHandle,
                 onCompletion: { [weak self] in
                     self?.scheduleConversationEndAfterSpeech()
                 }
@@ -208,6 +215,7 @@ extension VoiceAssistant {
             speakerInstruction: speakerInstruction,
             trailingInstructions: trailingInstructions,
             playThinkingFiller: Config.lowLatencyMode ? false : !wakeOnly,
+            logHandle: logHandle,
             onCompletion: onCompletion
         )
     }
@@ -219,6 +227,7 @@ extension VoiceAssistant {
         trailingInstructions: [String] = [],
         persistAssistantReply: Bool = true,
         playThinkingFiller: Bool,
+        logHandle: PersistentLog.TurnHandle? = nil,
         onCompletion: (@Sendable () async -> Void)? = nil
     ) {
         let turnID = UUID()
@@ -251,7 +260,7 @@ extension VoiceAssistant {
             defer { self.finishGeneration(for: turnID) }
             var printedAnyText = false
             do {
-                let fullReply = try await self.streamLLM(
+                let turnResult = try await self.streamLLM(
                     userText,
                     turnID: turnID,
                     speakerInstruction: speakerInstruction,
@@ -296,8 +305,9 @@ extension VoiceAssistant {
                     return
                 }
 
-                if !printedAnyText, !fullReply.isEmpty {
-                    let speakable = ReplyPostProcessor.processReply(fullReply)
+                var spokenReply = turnResult.reply
+                if !printedAnyText, !turnResult.reply.isEmpty {
+                    let speakable = ReplyPostProcessor.processReply(turnResult.reply)
                     if !speakable.isEmpty {
                         Log.transcript(speakable, terminator: "")
                         try await self.playback.queueAssistantReply(
@@ -307,8 +317,19 @@ extension VoiceAssistant {
                                 self?.isCurrentTurn(id) ?? false
                             }
                         )
+                        spokenReply = speakable
                     }
                 }
+
+                if let logHandle {
+                    PersistentLog.saveResponse(
+                        logHandle,
+                        toolCalls: turnResult.toolCalls,
+                        toolResults: turnResult.toolResults,
+                        reply: spokenReply
+                    )
+                }
+
                 if let onCompletion {
                     await onCompletion()
                 }

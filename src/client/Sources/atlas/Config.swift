@@ -62,7 +62,7 @@ struct Config {
     static let speechPeakThreshold: Float = 0.08
     static let startSpeechFrames = 4
     static let interruptSpeechFrames = 4
-    static let endSilenceFrames = 125 // 2.5s at 20ms/frame
+    static let endSilenceFrames = 125  // 2.5s at 20ms/frame
     static let minimumRecordingBytes = 2_000
     static let preRollMilliseconds = 500
     static let speculativeEndpointingEnabled = true
@@ -97,4 +97,12 @@ struct Config {
     static let toolCueFrequency1: Double = 880
     static let toolCueFrequency2: Double = 1_320
     static let toolCueDuration: TimeInterval = 0.14
+
+    static let persistentLogMode = true
+    static let logRootPath: String = {
+        let raw =
+            ProcessInfo.processInfo.environment["ATLAS_LOG_ROOT"]
+            ?? "~/workplace/atlas/logs"
+        return (raw as NSString).expandingTildeInPath
+    }()
 }
