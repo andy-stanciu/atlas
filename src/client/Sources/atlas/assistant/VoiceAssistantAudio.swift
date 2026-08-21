@@ -90,9 +90,21 @@ extension VoiceAssistant {
             if reachedSpeculativeSilence, !reachedFallbackSilence {
                 Log.endpoint(
                     String(
-                        format: "early trigger: pause score %.2f after %d silence frames",
+                        format: "early trigger: pause score %.2f after %d silence frames (%.0fms)",
                         currentPauseScore,
-                        silenceFrames
+                        silenceFrames,
+                        Double(silenceFrames) * Config.audioFrameMilliseconds
+                    )
+                )
+            } else if reachedFallbackSilence {
+                Log.endpoint(
+                    String(
+                        format:
+                            "fallback trigger: pause score %.2f never reached %.2f (%d silence frames, %.0fms)",
+                        currentPauseScore,
+                        Config.speculativePauseScoreThreshold,
+                        silenceFrames,
+                        Double(silenceFrames) * Config.audioFrameMilliseconds
                     )
                 )
             }

@@ -22,7 +22,7 @@ actor STTClient {
     private static let frameSamples = 480  // 20ms @ 24kHz, matches the server's encoder step
     private static let sttDelaySeconds = 0.5  // kyutai/stt-1b-en_fr's inherent algorithmic delay
     private static let flushFrames = Int((sttDelaySeconds / 0.02).rounded(.up)) + 1
-    private static let quietThreshold: CFAbsoluteTime = 0.15  // how long transcript must be stable before we return
+    private static let quietThreshold: CFAbsoluteTime = 0.25
     private static let pollInterval: UInt64 = 30_000_000  // 30ms
     private static let pauseScoreAttackAlpha: Float = 0.5
     private static let pauseScoreReleaseAlpha: Float = 0.1
@@ -38,7 +38,6 @@ actor STTClient {
     private var lastWordReceivedAt: CFAbsoluteTime?
     private var smoothedPauseScore: Float = 0
     private var pendingSamples: [Float] = []
-
     private var totalInputSamplesConsumed = 0
     private var nextOutputIndex = 0
     private var lastRawSample: Float = 0
@@ -127,7 +126,7 @@ actor STTClient {
 
         while CFAbsoluteTimeGetCurrent() < deadline {
             try await Task.sleep(nanoseconds: Self.pollInterval)
-            let quietSince = lastWordReceivedAt ?? flushSentAt
+            let quietSince = max(lastWordReceivedAt ?? flushSentAt, flushSentAt)
             if CFAbsoluteTimeGetCurrent() - quietSince >= Self.quietThreshold {
                 break
             }

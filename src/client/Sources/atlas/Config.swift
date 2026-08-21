@@ -57,16 +57,17 @@ struct Config {
     static let historyTrimTarget = 14
 
     // Audio interface settings
+    static let audioFrameMilliseconds: Double = 20
     static let speechThreshold: Float = 0.035
     static let speechPeakThreshold: Float = 0.08
     static let startSpeechFrames = 4
     static let interruptSpeechFrames = 4
-    static let endSilenceFrames = 100
+    static let endSilenceFrames = 125 // 2.5s at 20ms/frame
     static let minimumRecordingBytes = 2_000
     static let preRollMilliseconds = 500
     static let speculativeEndpointingEnabled = true
     static let speculativePauseScoreThreshold: Double = 0.6
-    static let speculativeEarlySilenceFrames = 15
+    static let speculativeEarlySilenceFrames = 15  // ~300ms at 20ms/frame
 
     static let conversationTimeoutSeconds: TimeInterval = 7.0
     static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
