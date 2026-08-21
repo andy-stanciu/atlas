@@ -24,17 +24,21 @@ actor STTClient {
     private static let flushFrames = Int((sttDelaySeconds / 0.02).rounded(.up)) + 1
     private static let quietThreshold: CFAbsoluteTime = 0.15  // how long transcript must be stable before we return
     private static let pollInterval: UInt64 = 30_000_000  // 30ms
+    private static let pauseScoreAttackAlpha: Float = 0.5
+    private static let pauseScoreReleaseAlpha: Float = 0.1
 
     private let serverURL: URL
     private let apiKey: String
+    private let onPauseScoreUpdate: (@Sendable (Double) -> Void)?
 
     private var task: URLSessionWebSocketTask?
     private var receiveLoop: Task<Void, Never>?
     private var transcript = ""
     private var lastServerError: Error?
     private var lastWordReceivedAt: CFAbsoluteTime?
-
+    private var smoothedPauseScore: Float = 0
     private var pendingSamples: [Float] = []
+
     private var totalInputSamplesConsumed = 0
     private var nextOutputIndex = 0
     private var lastRawSample: Float = 0
@@ -42,10 +46,12 @@ actor STTClient {
     init(
         host: String = Config.sttServerHost,
         port: Int = Config.sttServerPort,
-        apiKey: String = Config.sttServerAPIKey
+        apiKey: String = Config.sttServerAPIKey,
+        onPauseScoreUpdate: (@Sendable (Double) -> Void)? = nil
     ) {
         self.serverURL = URL(string: "ws://\(host):\(port)/api/asr-streaming")!
         self.apiKey = apiKey
+        self.onPauseScoreUpdate = onPauseScoreUpdate
     }
 
     func verifyReachable() async throws {
@@ -80,10 +86,12 @@ actor STTClient {
         transcript = ""
         lastServerError = nil
         lastWordReceivedAt = nil
+        smoothedPauseScore = 0
         pendingSamples = []
         totalInputSamplesConsumed = 0
         nextOutputIndex = 0
         lastRawSample = 0
+        onPauseScoreUpdate?(0)
 
         receiveLoop = Task { [weak self] in
             await self?.runReceiveLoop(newTask)
@@ -167,6 +175,10 @@ actor STTClient {
                     transcript += (transcript.isEmpty ? "" : " ") + text
                     lastWordReceivedAt = CFAbsoluteTimeGetCurrent()
                 }
+            case "Step":
+                guard case .array(let prs) = fields["prs"] ?? .null, prs.count >= 3 else { break }
+                guard case .double(let pauseRaw) = prs[2] else { break }
+                updatePauseScore(Float(pauseRaw))
             case "Error":
                 if case .string(let message) = fields["message"] ?? .null {
                     lastServerError = STTClientError.serverError(message)
@@ -175,6 +187,13 @@ actor STTClient {
                 break
             }
         }
+    }
+
+    private func updatePauseScore(_ raw: Float) {
+        let alpha =
+            raw > smoothedPauseScore ? Self.pauseScoreAttackAlpha : Self.pauseScoreReleaseAlpha
+        smoothedPauseScore += alpha * (raw - smoothedPauseScore)
+        onPauseScoreUpdate?(Double(smoothedPauseScore))
     }
 
     private func receiveDecoded(_ task: URLSessionWebSocketTask) async throws -> MsgPackValue? {

@@ -19,9 +19,10 @@ final class VoiceAssistant {
     let toolServer = ToolServerClient()
     let speakerClient = SpeakerClient()
     let speakerEnrollment: SpeakerEnrollmentCoordinator
-    var sttClient: STTClient? = STTClient()
+    var sttClient: STTClient?
     var recognizerFeedChain: Task<Void, Never> = Task {}
     var sttHealthCheckTask: Task<Void, Never> = Task {}
+    var currentPauseScore: Double = 0
 
     var satellite: SatelliteLink!
     var soundEffects: SoundEffects!
@@ -110,6 +111,15 @@ final class VoiceAssistant {
             beginScheduledSpeech: { [weak self] in
                 self?.beginScheduledSpeech() ?? false
             },
+        )
+
+        let lock = self.lock
+        sttClient = STTClient(
+            onPauseScoreUpdate: { [weak self] score in
+                lock.withLock {
+                    self?.currentPauseScore = score
+                }
+            }
         )
 
         sttHealthCheckTask = Task { [weak self] in

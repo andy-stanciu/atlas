@@ -32,6 +32,7 @@ struct Config {
     static let printTimingDebug = true
     static let printSpeakerDebug = false
     static let printToolCallDebug = true
+    static let printEndpointDebug = true
 
     static let debugMicRecordingPath = "/tmp/atlas-mic-debug.wav"
     static let debugMicRecordingSeconds = 60
@@ -60,9 +61,12 @@ struct Config {
     static let speechPeakThreshold: Float = 0.08
     static let startSpeechFrames = 4
     static let interruptSpeechFrames = 4
-    static let endSilenceFrames = 80
+    static let endSilenceFrames = 100
     static let minimumRecordingBytes = 2_000
     static let preRollMilliseconds = 500
+    static let speculativeEndpointingEnabled = true
+    static let speculativePauseScoreThreshold: Double = 0.6
+    static let speculativeEarlySilenceFrames = 15
 
     static let conversationTimeoutSeconds: TimeInterval = 7.0
     static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
