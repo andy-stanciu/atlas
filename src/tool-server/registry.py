@@ -23,7 +23,7 @@ class ToolRegistry:
             "schedule_reminder": lambda: self.service.schedule_reminder(arguments),
             "list_reminders": self.service.list_reminders,
             "cancel_reminder": lambda: self.service.cancel_reminder(arguments),
-            "acknowledge_reminder": self.service.acknowledge_reminder,
+            "address_reminder": lambda: self.service.address_reminder(arguments),
             "schedule_sequence": lambda: self.service.schedule_sequence(arguments),
             "list_sequences": self.service.list_sequences,
             "cancel_sequence": lambda: self.service.cancel_sequence(arguments),

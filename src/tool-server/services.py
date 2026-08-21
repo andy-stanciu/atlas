@@ -167,7 +167,13 @@ class AtlasService:
 
         return {"ok": True, "reminder_id": reminder_id, "status": "cancelled"}
 
-    def acknowledge_reminder(self):
+    def address_reminder(self, arguments):
+        acknowledged = arguments.get("acknowledged")
+        if not isinstance(acknowledged, bool):
+            raise ValidationError("acknowledged must be a boolean.")
+        if not acknowledged:
+            return {"ok": True, "status": "still_active"}
+
         reminder_id = self.repository.acknowledge_active_reminder()
 
         if reminder_id is None:

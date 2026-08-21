@@ -20,7 +20,7 @@ enum ConversationClosing {
         guard !text.isEmpty else {
             return Evaluation(result: .none, requestRemainder: nil)
         }
-        guard text.hasSuffix(" atlas") else {
+        guard text.hasSuffix(" atlas") || text.hasSuffix(" alice") else {
             return Evaluation(result: .none, requestRemainder: nil)
         }
         text = String(text.dropLast(" atlas".count))

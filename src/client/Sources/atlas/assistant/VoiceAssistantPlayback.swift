@@ -133,10 +133,20 @@ extension VoiceAssistant {
     }
 
     func playToolCue(
-        for turnID: UUID
+        for toolName: String?,
+        turnID: UUID
     ) async {
         guard isCurrentTurn(turnID) else {
             return
+        }
+        if !Config.verboseToolCalling {
+            return
+        }
+        if let toolName {
+            soundEffects.play(
+                "tool_\(toolName)",
+                volume: Config.speakingVolume
+            )
         }
         soundEffects.play("tool_call")
     }
@@ -154,7 +164,7 @@ extension VoiceAssistant {
                     return .notStarted
                 }
 
-                let spokenText = try await self.ollama.generateScheduledSpeech(
+                let spokenText = try await self.llm.generateScheduledSpeech(
                     text: speech.text,
                     kind: speech.kind,
                     announcementNumber: number,

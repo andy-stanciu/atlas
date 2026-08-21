@@ -72,7 +72,7 @@
     "type": "function",
     "function": {
       "name": "schedule_reminder",
-      "description": "Schedule a spoken message that repeats until the user acknowledges it. Give in_minutes, or time with optional date. If the user asks for it to repeat, also give repeat.",
+      "description": "Schedule a spoken message that repeats until the user addresses it. Give in_minutes, or time with optional date. If the user asks for it to repeat, also give repeat.",
       "parameters": {
         "type": "object",
         "required": [
@@ -136,11 +136,19 @@
   {
     "type": "function",
     "function": {
-      "name": "acknowledge_reminder",
-      "description": "Stop the currently repeating reminder. Call when the user confirms, dismisses, or completes it.",
+      "name": "address_reminder",
+      "description": "Report whether the user is done with the reminder that is currently awaiting acknowledgement. Set acknowledged to true only if the user's message indicates they completed, dismissed, or cancelled the reminder; otherwise set it to false.",
       "parameters": {
         "type": "object",
-        "properties": {}
+        "required": [
+          "acknowledged"
+        ],
+        "properties": {
+          "acknowledged": {
+            "type": "boolean",
+            "description": "True if the user is done with the reminder, false if they are not yet done or want it repeated."
+          }
+        }
       }
     }
   },
@@ -173,7 +181,7 @@
           },
           "actions": {
             "type": "array",
-            "description": "Actions run in order. 'reminder' repeats until acknowledged and needs text. 'announcement' is spoken once and needs text. 'light' is silent and needs room and power.",
+            "description": "Actions run in order. 'reminder' repeats until addressed by the user and needs text. 'announcement' is spoken once and needs text. 'light' is silent and needs room and power.",
             "items": {
               "type": "object",
               "required": [

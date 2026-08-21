@@ -2,7 +2,7 @@ import Foundation
 
 final class SpeakerEnrollmentCoordinator {
     private let speakerClient: SpeakerClient
-    private let ollama: OllamaClient
+    private let llm: LLMClient
 
     private var anonymousProfileID: Int?
     private var latestUnknownSpeakerWAV: URL?
@@ -10,15 +10,13 @@ final class SpeakerEnrollmentCoordinator {
 
     private var nameRequestPending = false
 
-    private var nameRequestTask: Task<String?, Never>?
-
     var hasPendingNameRequest: Bool {
         nameRequestPending && !isAwaitingName
     }
 
-    init(speakerClient: SpeakerClient, ollama: OllamaClient) {
+    init(speakerClient: SpeakerClient, llm: LLMClient) {
         self.speakerClient = speakerClient
-        self.ollama = ollama
+        self.llm = llm
     }
 
     func processTurnResult(
@@ -67,27 +65,11 @@ final class SpeakerEnrollmentCoordinator {
         }
     }
 
-    func beginNameRequest() async -> String? {
-        guard nameRequestPending, !isAwaitingName else {
-            return nil
-        }
-
-        var generated: String?
-        if let task = nameRequestTask {
-            generated = await task.value
-            nameRequestTask = nil
-        }
-
-        let prompt: String
-        if let generated, !generated.isEmpty {
-            prompt = generated
-        } else {
-            prompt = Config.speakerNameRequestFallback
-        }
-
+    func beginNameRequest() -> Bool {
+        guard nameRequestPending, !isAwaitingName else { return false }
         nameRequestPending = false
         isAwaitingName = true
-        return prompt
+        return true
     }
 
     func rescheduleNameRequest() {
@@ -100,9 +82,8 @@ final class SpeakerEnrollmentCoordinator {
 
     func resolveNameResponse(userText: String) async -> String {
         isAwaitingName = false
-        nameRequestTask = nil
 
-        let extractedName = try? await ollama.extractSpeakerName(from: userText)
+        let extractedName = try? await llm.extractSpeakerName(from: userText)
 
         if let extractedName, let profileID = anonymousProfileID {
             Task { [speakerClient] in
@@ -132,13 +113,6 @@ final class SpeakerEnrollmentCoordinator {
             return
         }
         nameRequestPending = true
-        nameRequestTask = Task { [ollama] in
-            let generated = try? await ollama.generateSpeakerNameRequest()
-            guard let generated, !generated.isEmpty else {
-                return nil
-            }
-            return generated
-        }
     }
 
     private func enrollAnonymously(wavURL: URL) {

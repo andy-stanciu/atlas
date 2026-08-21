@@ -1,55 +1,103 @@
 import Foundation
+import QuartzCore
 
 extension VoiceAssistant {
-    func streamOllama(
+    struct StreamedTurnResult {
+        let reply: String
+        let toolCalls: [ToolCall]
+        let toolResults: [String]
+    }
+
+    func streamLLM(
         _ userText: String,
         turnID: UUID,
         speakerInstruction: String? = nil,
+        trailingInstructions: [String] = [],
+        persistAssistantReply: Bool = true,
         onSentence: @escaping (String) async throws -> Void
-    ) async throws -> String {
+    ) async throws -> StreamedTurnResult {
         let activeReminder = await notificationCoordinator?
             .acknowledgementEligibleReminderSnapshot()
 
         let snapshot = lock.withLock { history }
 
+        let accumulator = SentenceAccumulator()
+
+        // Sentences flush to speech as they complete, in order, without
+        // blocking the LLM stream on TTS synthesis.
+        var sentenceChain: Task<Void, Never> = Task {}
+        func enqueueSentence(_ sentence: String) {
+            let previous = sentenceChain
+            sentenceChain = Task {
+                await previous.value
+                try? await onSentence(sentence)
+            }
+        }
+
+        let tools = try await toolsForTurn()
         let engine = ConversationEngine(
-            ollama: ollama,
+            llm: llm,
             toolServer: toolServer,
-            onToolBatch: { [weak self] _ in
+            preloadedTools: tools,
+            onToolBatch: { [weak self] calls in
                 guard let self else {
                     return
                 }
-                await self.playToolCue(for: turnID)
+                // A pass that calls tools: drop any unflushed preamble
+                // fragment so it never prepends the final answer.
+                accumulator.discardPending()
+                await self.playToolCue(
+                    for: calls.first?.function.name,
+                    turnID: turnID
+                )
+            },
+            onTextDelta: { delta in
+                for sentence in accumulator.append(delta) {
+                    enqueueSentence(sentence)
+                }
             }
         )
 
+        let generationStart = CACurrentMediaTime()
         let result = try await engine.respond(
             to: userText,
             history: snapshot,
             activeReminderText: activeReminder?.text,
-            speakerInstruction: speakerInstruction
+            speakerInstruction: speakerInstruction,
+            trailingInstructions: trailingInstructions
         )
+        Log.timing(
+            "LLM complete: "
+                + String(
+                    format: "%.3f",
+                    CACurrentMediaTime() - generationStart
+                ) + "s"
+        )
+
+        if activeReminder != nil || !trailingInstructions.isEmpty {
+            LLMPrefixStability.reset()
+        }
 
         try Task.checkCancellation()
 
-        if result.successfulToolNames.contains(
-            "acknowledge_reminder"
-        ) {
-            await notificationCoordinator?
-                .markReminderAcknowledged()
-        }
-
-        let accumulator = SentenceAccumulator()
-
-        for sentence in accumulator.append(result.reply) {
-            try Task.checkCancellation()
-            try await onSentence(sentence)
+        if let status = addressReminderStatus(result) {
+            switch status {
+            case "acknowledged":
+                await notificationCoordinator?.markReminderAcknowledged()
+            case "still_active":
+                await notificationCoordinator?.markReminderStillActive()
+            default:
+                break
+            }
         }
 
         if let remaining = accumulator.finish() {
-            try Task.checkCancellation()
-            try await onSentence(remaining)
+            enqueueSentence(remaining)
         }
+
+        try Task.checkCancellation()
+
+        await sentenceChain.value
 
         try Task.checkCancellation()
 
@@ -58,19 +106,37 @@ extension VoiceAssistant {
                 return
             }
 
-            // Update history with the final messages from the conversation result, 
-            // filtering out any messages that contain speaker identity information.
-            history = result.finalMessages.filter {
-                !$0.content.contains("Speaker identity for this request is")
+            var updated = result.finalMessages
+            if !persistAssistantReply, updated.last?.role == "assistant" {
+                updated.removeLast()
             }
+            history = updated
 
             if history.count > Config.maxHistoryMessages + 1 {
                 history.removeSubrange(
-                    1..<(history.count - Config.maxHistoryMessages)
+                    1..<(history.count - Config.historyTrimTarget)
                 )
+                LLMPrefixStability.reset()
             }
         }
 
-        return result.reply
+        return StreamedTurnResult(
+            reply: result.reply,
+            toolCalls: result.toolCalls,
+            toolResults: result.toolResults
+        )
+    }
+
+    private func addressReminderStatus(_ result: ConversationResult) -> String? {
+        struct AddressReminderResult: Decodable { let status: String? }
+
+        for (call, resultText) in zip(result.toolCalls, result.toolResults) {
+            guard call.function.name == "address_reminder",
+                let data = resultText.data(using: .utf8),
+                let decoded = try? JSONDecoder().decode(AddressReminderResult.self, from: data)
+            else { continue }
+            return decoded.status
+        }
+        return nil
     }
 }

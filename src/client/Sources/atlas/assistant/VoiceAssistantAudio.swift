@@ -81,14 +81,35 @@ extension VoiceAssistant {
                 silenceFrames += 1
             }
 
-            if !conversationActive,
-                recording.count
-                    >= Int(recordingSampleRate * Config.idleRotationSeconds) * 2
-            {
-                rotateIdleRecognizerSession()
+            let reachedFallbackSilence = silenceFrames >= Config.endSilenceFrames
+            let reachedSpeculativeSilence =
+                Config.speculativeEndpointingEnabled
+                && silenceFrames >= Config.speculativeEarlySilenceFrames
+                && currentPauseScore >= Config.speculativePauseScoreThreshold
+
+            if reachedSpeculativeSilence, !reachedFallbackSilence {
+                Log.endpoint(
+                    String(
+                        format: "early trigger: pause score %.2f after %d silence frames (%.0fms)",
+                        currentPauseScore,
+                        silenceFrames,
+                        Double(silenceFrames) * Config.audioFrameMilliseconds
+                    )
+                )
+            } else if reachedFallbackSilence {
+                Log.endpoint(
+                    String(
+                        format:
+                            "fallback trigger: pause score %.2f never reached %.2f (%d silence frames, %.0fms)",
+                        currentPauseScore,
+                        Config.speculativePauseScoreThreshold,
+                        silenceFrames,
+                        Double(silenceFrames) * Config.audioFrameMilliseconds
+                    )
+                )
             }
 
-            if silenceFrames >= Config.endSilenceFrames {
+            if reachedFallbackSilence || reachedSpeculativeSilence {
                 if recording.count >= Config.minimumRecordingBytes {
                     completedRecording = recording
                     completedSampleRate = recordingSampleRate

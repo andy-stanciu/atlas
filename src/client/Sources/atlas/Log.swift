@@ -17,6 +17,7 @@ enum Log {
         static let purple = "\u{001B}[38;5;146m"
         static let green = "\u{001B}[38;5;108m"
         static let red = "\u{001B}[38;5;174m"
+        static let cyan = "\u{001B}[38;5;80m"
         static let reset = "\u{001B}[0m"
     }
 
@@ -81,6 +82,12 @@ enum Log {
 
     static func postprocess(_ message: String) {
         write("[postprocess] \(message)", color: Palette.red)
+    }
+
+    static func endpoint(_ message: String) {
+        if Config.printEndpointDebug {
+            write("[endpoint] \(message)", color: Palette.cyan)
+        }
     }
 
     static func system(_ message: String, terminator: String = "\n") {

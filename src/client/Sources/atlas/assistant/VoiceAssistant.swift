@@ -14,21 +14,15 @@ final class VoiceAssistant {
         qos: .userInitiated
     )
 
-    let voiceFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: Config.satelliteDownlinkSampleRate,
-        channels: 1,
-        interleaved: false
-    )!
-
     let kokoro: KokoroWorker
-    let ollama = OllamaClient()
+    let llm = LLMClient()
     let toolServer = ToolServerClient()
     let speakerClient = SpeakerClient()
     let speakerEnrollment: SpeakerEnrollmentCoordinator
     var sttClient: STTClient?
     var recognizerFeedChain: Task<Void, Never> = Task {}
-    var sttConnectTask: Task<Void, Never> = Task {}
+    var sttHealthCheckTask: Task<Void, Never> = Task {}
+    var currentPauseScore: Double = 0
 
     var satellite: SatelliteLink!
     var soundEffects: SoundEffects!
@@ -84,12 +78,13 @@ final class VoiceAssistant {
     var history = [
         Message(role: "system", content: SystemPrompts.mainSystemPrompt)
     ]
+    var cachedTools: [ToolDefinition]?
 
     init() throws {
-        kokoro = try KokoroWorker()
+        kokoro = KokoroWorker()
         speakerEnrollment = SpeakerEnrollmentCoordinator(
             speakerClient: speakerClient,
-            ollama: ollama
+            llm: llm
         )
 
         satellite = SatelliteLink(
@@ -107,7 +102,6 @@ final class VoiceAssistant {
             satellite: satellite,
             kokoro: kokoro,
             queue: ttsQueue,
-            voiceFormat: voiceFormat,
             beginSpeaking: { [weak self] purpose in
                 self?.beginPlayback(purpose: purpose) ?? false
             },
@@ -120,18 +114,23 @@ final class VoiceAssistant {
         )
 
         let lock = self.lock
-        sttConnectTask = Task { [weak self] in
-            let client = STTClient()
-            do {
-                try await client.connect()
+        sttClient = STTClient(
+            onPauseScoreUpdate: { [weak self] score in
                 lock.withLock {
-                    self?.sttClient = client
+                    self?.currentPauseScore = score
                 }
-                Log.system("Connected to sttd.")
+            }
+        )
+
+        sttHealthCheckTask = Task { [weak self] in
+            guard let client = self?.sttClient else { return }
+            do {
+                try await client.verifyReachable()
+                Log.system("Atlas STT server is reachable.")
             } catch {
                 fatalError(
-                    "Could not connect to sttd — start it with "
-                        + "'swift run sttd <model-folder>' in another terminal: "
+                    "Could not reach the Atlas STT server — make sure the "
+                        + "'atlas-stt' systemd service is running on the desktop: "
                         + error.localizedDescription
                 )
             }
@@ -143,8 +142,8 @@ final class VoiceAssistant {
     }
 
     func start() async throws {
-        Log.system("Connecting to speech recognition daemon...")
-        await sttConnectTask.value
+        Log.system("Checking connectivity to the Atlas STT server...")
+        await sttHealthCheckTask.value
 
         try satellite.start()
         startNotificationCoordinator()

@@ -22,6 +22,7 @@ actor NotificationCoordinator {
     private var activeReminder: ActiveReminder?
     private var announcementDeliveryInFlight = false
     private var pollingTask: Task<Void, Never>?
+    private var currentReminderWasDeferred = false
 
     init(
         toolServer: ToolServerClient,
@@ -66,6 +67,7 @@ actor NotificationCoordinator {
 
     func markReminderAcknowledged() {
         activeReminder = nil
+        currentReminderWasDeferred = false
     }
 
     private func run() async {
@@ -107,6 +109,7 @@ actor NotificationCoordinator {
 
         switch speech.kind {
         case .reminder:
+            currentReminderWasDeferred = false
             activeReminder = ActiveReminder(
                 speech: speech,
                 announcementCount: 0,
@@ -118,6 +121,10 @@ actor NotificationCoordinator {
         case .announcement:
             await deliverAnnouncement(speech)
         }
+    }
+
+    func markReminderStillActive() {
+        currentReminderWasDeferred = true
     }
 
     private func deliverAnnouncement(
@@ -268,9 +275,14 @@ actor NotificationCoordinator {
         activeReminder = reminder
     }
 
+    /// Direct server-side path for "bye" while a reminder is active — bypasses
+    /// the LLM entirely, so it always addresses with acknowledged=true.
     @discardableResult
     func acknowledgeActiveReminder() async -> Bool {
         guard acknowledgementEligibleReminderSnapshot() != nil else {
+            return false
+        }
+        guard !currentReminderWasDeferred else {
             return false
         }
 
@@ -280,22 +292,23 @@ actor NotificationCoordinator {
                     type: nil,
                     function: ToolFunctionCall(
                         index: nil,
-                        name: "acknowledge_reminder",
-                        arguments: [:]
+                        name: "address_reminder",
+                        arguments: ["acknowledged": .bool(true)]
                     )
                 )
             )
 
-            struct AcknowledgeResult: Decodable {
+            struct AddressReminderResult: Decodable {
                 let ok: Bool
+                let status: String?
             }
 
             let result = try JSONDecoder().decode(
-                AcknowledgeResult.self,
+                AddressReminderResult.self,
                 from: Data(resultBody.utf8)
             )
 
-            guard result.ok else {
+            guard result.ok, result.status == "acknowledged" else {
                 return false
             }
         } catch {

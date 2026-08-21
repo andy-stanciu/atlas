@@ -1,160 +1,263 @@
 import Foundation
-@preconcurrency import STTIPC
 
 enum STTClientError: LocalizedError {
     case notConnected
-    case daemonUnreachable(String)
-    case daemonError(String)
+    case connectionFailed(String)
+    case serverError(String)
 
     var errorDescription: String? {
         switch self {
         case .notConnected:
-            return "Not connected to sttd."
-        case .daemonUnreachable(let message):
-            return "Could not reach sttd: \(message)"
-        case .daemonError(let message):
+            return "Not connected to the Atlas STT server."
+        case .connectionFailed(let message):
+            return "Could not reach the Atlas STT server: \(message)"
+        case .serverError(let message):
             return message
         }
     }
 }
 
 actor STTClient {
-    private var connection: STTFrameConnection?
-    private var pendingReply: CheckedContinuation<(type: UInt8, payload: Data), Error>?
+    private static let targetSampleRate = 24_000
+    private static let frameSamples = 480  // 20ms @ 24kHz, matches the server's encoder step
+    private static let sttDelaySeconds = 0.5  // kyutai/stt-1b-en_fr's inherent algorithmic delay
+    private static let flushFrames = Int((sttDelaySeconds / 0.02).rounded(.up)) + 1
+    private static let quietThreshold: CFAbsoluteTime = 0.25
+    private static let pollInterval: UInt64 = 30_000_000  // 30ms
+    private static let pauseScoreAttackAlpha: Float = 0.5
+    private static let pauseScoreReleaseAlpha: Float = 0.1
 
-    init() {}
+    private let serverURL: URL
+    private let apiKey: String
+    private let onPauseScoreUpdate: (@Sendable (Double) -> Void)?
 
-    func connect() async throws {
-        let fd = try STTUnixSocket.connectClient(path: STTIPCConfig.socketPath)
-        let connection = STTFrameConnection(fd: fd)
-        self.connection = connection
+    private var task: URLSessionWebSocketTask?
+    private var receiveLoop: Task<Void, Never>?
+    private var transcript = ""
+    private var lastServerError: Error?
+    private var lastWordReceivedAt: CFAbsoluteTime?
+    private var smoothedPauseScore: Float = 0
+    private var pendingSamples: [Float] = []
+    private var totalInputSamplesConsumed = 0
+    private var nextOutputIndex = 0
+    private var lastRawSample: Float = 0
 
-        startReadLoop(connection)
+    init(
+        host: String = Config.sttServerHost,
+        port: Int = Config.sttServerPort,
+        apiKey: String = Config.sttServerAPIKey,
+        onPauseScoreUpdate: (@Sendable (Double) -> Void)? = nil
+    ) {
+        self.serverURL = URL(string: "ws://\(host):\(port)/api/asr-streaming")!
+        self.apiKey = apiKey
+        self.onPauseScoreUpdate = onPauseScoreUpdate
+    }
 
-        let reply = try await sendAndAwaitReply(
-            connection: connection,
-            type: STTRequestType.ping.rawValue,
-            payload: Data()
-        )
+    func verifyReachable() async throws {
+        try await begin()
+        await teardown()
+    }
 
-        guard reply.type == STTResponseType.pong.rawValue else {
-            throw STTClientError.daemonUnreachable("Unexpected ping response")
+    func begin() async throws {
+        await teardown()
+
+        var request = URLRequest(url: serverURL)
+        request.setValue(apiKey, forHTTPHeaderField: "kyutai-api-key")
+
+        let newTask = URLSession.shared.webSocketTask(with: request)
+        newTask.resume()
+
+        guard let firstMessage = try await receiveDecoded(newTask) else {
+            newTask.cancel(with: .goingAway, reason: nil)
+            throw STTClientError.connectionFailed(
+                "Connection closed before a Ready message arrived")
+        }
+        guard case .map(let fields) = firstMessage else {
+            newTask.cancel(with: .goingAway, reason: nil)
+            throw STTClientError.connectionFailed("Unexpected startup message shape")
+        }
+        guard case .string("Ready") = fields["type"] ?? .null else {
+            newTask.cancel(with: .goingAway, reason: nil)
+            throw STTClientError.connectionFailed("Did not receive a Ready message")
+        }
+
+        task = newTask
+        transcript = ""
+        lastServerError = nil
+        lastWordReceivedAt = nil
+        smoothedPauseScore = 0
+        pendingSamples = []
+        totalInputSamplesConsumed = 0
+        nextOutputIndex = 0
+        lastRawSample = 0
+        onPauseScoreUpdate?(0)
+
+        receiveLoop = Task { [weak self] in
+            await self?.runReceiveLoop(newTask)
         }
     }
 
-    func begin() throws {
-        guard let connection else {
-            throw STTClientError.notConnected
-        }
-        try connection.writeFrame(type: STTRequestType.begin.rawValue, payload: Data())
-    }
-
-    func appendPCM16(_ pcm: Data, sourceSampleRate: Int) throws {
-        guard let connection else {
+    func appendPCM16(_ pcm: Data, sourceSampleRate: Int) async throws {
+        guard let task else {
             throw STTClientError.notConnected
         }
 
-        var payload = Data()
-        var rate = UInt32(sourceSampleRate).bigEndian
-        withUnsafeBytes(of: &rate) { payload.append(contentsOf: $0) }
-        payload.append(pcm)
+        pendingSamples.append(contentsOf: resample(pcm, sourceSampleRate: sourceSampleRate))
 
-        try connection.writeFrame(type: STTRequestType.append.rawValue, payload: payload)
+        while pendingSamples.count >= Self.frameSamples {
+            let frame = Array(pendingSamples.prefix(Self.frameSamples))
+            pendingSamples.removeFirst(Self.frameSamples)
+            try await send(frame: frame, task: task)
+        }
     }
 
     func finish() async throws -> String {
-        guard let connection else {
+        guard let task else {
             throw STTClientError.notConnected
         }
 
-        let reply = try await sendAndAwaitReply(
-            connection: connection,
-            type: STTRequestType.finish.rawValue,
-            payload: Data()
-        )
-
-        switch STTResponseType(rawValue: reply.type) {
-        case .text:
-            return String(data: reply.payload, encoding: .utf8) ?? ""
-        case .error:
-            throw STTClientError.daemonError(
-                String(data: reply.payload, encoding: .utf8) ?? "Unknown STT error"
-            )
-        default:
-            throw STTClientError.daemonError("Unexpected finish response")
+        let silence = [Float](repeating: 0, count: Self.frameSamples)
+        for _ in 0..<Self.flushFrames {
+            try await send(frame: silence, task: task)
         }
+
+        let flushSentAt = CFAbsoluteTimeGetCurrent()
+        let deadline = flushSentAt + Self.sttDelaySeconds + 0.3
+
+        while CFAbsoluteTimeGetCurrent() < deadline {
+            try await Task.sleep(nanoseconds: Self.pollInterval)
+            let quietSince = max(lastWordReceivedAt ?? flushSentAt, flushSentAt)
+            if CFAbsoluteTimeGetCurrent() - quietSince >= Self.quietThreshold {
+                break
+            }
+        }
+
+        let result = transcript
+        let error = lastServerError
+        await teardown()
+
+        if let error {
+            throw error
+        }
+        return result
     }
 
     func cancel() async throws {
-        guard let connection else {
-            throw STTClientError.notConnected
-        }
-
-        _ = try await sendAndAwaitReply(
-            connection: connection,
-            type: STTRequestType.cancel.rawValue,
-            payload: Data()
-        )
+        await teardown()
     }
 
-    private func sendAndAwaitReply(
-        connection: STTFrameConnection,
-        type: UInt8,
-        payload: Data
-    ) async throws -> (type: UInt8, payload: Data) {
-        try await withCheckedThrowingContinuation { continuation in
-            self.pendingReply = continuation
+    // MARK: - Internals
 
-            do {
-                try connection.writeFrame(type: type, payload: payload)
-            } catch {
-                self.pendingReply = nil
-                continuation.resume(throwing: error)
-            }
-        }
+    private func send(frame: [Float], task: URLSessionWebSocketTask) async throws {
+        let message = MsgPackValue.map([
+            "type": .string("Audio"),
+            "pcm": .array(frame.map { .float($0) }),
+        ])
+        try await task.send(.data(MsgPack.encode(message)))
     }
 
-    private func handleIncoming(_ frame: (type: UInt8, payload: Data)) {
-        guard let continuation = pendingReply else {
-            return
-        }
-
-        pendingReply = nil
-        continuation.resume(returning: frame)
-    }
-
-    private func handleReadLoopEnded() {
-        guard let continuation = pendingReply else {
-            return
-        }
-
-        pendingReply = nil
-        continuation.resume(throwing: STTClientError.daemonUnreachable("Connection closed"))
-    }
-
-    private func startReadLoop(_ connection: STTFrameConnection) {
-        Thread.detachNewThread { [weak self] in
-            while true {
-                guard let frame = try? connection.readFrame() else {
-                    break
-                }
-
-                guard let self else {
-                    return
-                }
-
-                Task {
-                    await self.handleIncoming(frame)
-                }
-            }
-
-            guard let self else {
+    private func runReceiveLoop(_ task: URLSessionWebSocketTask) async {
+        while true {
+            guard let value = try? await receiveDecoded(task) else {
                 return
             }
+            guard case .map(let fields) = value else {
+                continue
+            }
+            guard case .string(let type) = fields["type"] ?? .null else {
+                continue
+            }
 
-            Task {
-                await self.handleReadLoopEnded()
+            switch type {
+            case "Word":
+                if case .string(let text) = fields["text"] ?? .null {
+                    transcript += (transcript.isEmpty ? "" : " ") + text
+                    lastWordReceivedAt = CFAbsoluteTimeGetCurrent()
+                }
+            case "Step":
+                guard case .array(let prs) = fields["prs"] ?? .null, prs.count >= 3 else { break }
+                guard case .double(let pauseRaw) = prs[2] else { break }
+                updatePauseScore(Float(pauseRaw))
+            case "Error":
+                if case .string(let message) = fields["message"] ?? .null {
+                    lastServerError = STTClientError.serverError(message)
+                }
+            default:
+                break
             }
         }
+    }
+
+    private func updatePauseScore(_ raw: Float) {
+        let alpha =
+            raw > smoothedPauseScore ? Self.pauseScoreAttackAlpha : Self.pauseScoreReleaseAlpha
+        smoothedPauseScore += alpha * (raw - smoothedPauseScore)
+        onPauseScoreUpdate?(Double(smoothedPauseScore))
+    }
+
+    private func receiveDecoded(_ task: URLSessionWebSocketTask) async throws -> MsgPackValue? {
+        guard case .data(let data) = try await task.receive() else {
+            return nil
+        }
+        return MsgPack.decode(data)
+    }
+
+    private func teardown() async {
+        receiveLoop?.cancel()
+        receiveLoop = nil
+        task?.cancel(with: .normalClosure, reason: nil)
+        task = nil
+    }
+
+    private func resample(_ pcm: Data, sourceSampleRate: Int) -> [Float] {
+        let sampleCount = pcm.count / 2
+        var input = [Float](repeating: 0, count: sampleCount)
+        pcm.withUnsafeBytes { rawBuffer in
+            let int16Buffer = rawBuffer.bindMemory(to: Int16.self)
+            for i in 0..<sampleCount {
+                input[i] = Float(int16Buffer[i]) / 32_768.0
+            }
+        }
+
+        guard sourceSampleRate != Self.targetSampleRate, !input.isEmpty else {
+            totalInputSamplesConsumed += input.count
+            lastRawSample = input.last ?? lastRawSample
+            return input
+        }
+
+        let divisor = gcd(sourceSampleRate, Self.targetSampleRate)
+        let upsampleFactor = Self.targetSampleRate / divisor  // L
+        let downsampleFactor = sourceSampleRate / divisor  // M
+
+        var output: [Float] = []
+        let chunkStart = totalInputSamplesConsumed
+
+        while true {
+            let inputPositionNumerator = nextOutputIndex * downsampleFactor
+            let globalInputIndex = inputPositionNumerator / upsampleFactor
+            let remainder = inputPositionNumerator % upsampleFactor
+            let localIndex = globalInputIndex - chunkStart
+
+            guard localIndex < input.count else { break }
+
+            let frac = Float(remainder) / Float(upsampleFactor)
+            let s0 = localIndex <= 0 ? lastRawSample : input[localIndex - 1]
+            let s1 = input[max(localIndex, 0)]
+            output.append(s0 + (s1 - s0) * frac)
+            nextOutputIndex += 1
+        }
+
+        totalInputSamplesConsumed += input.count
+        lastRawSample = input.last ?? lastRawSample
+        return output
+    }
+
+    private func gcd(_ a: Int, _ b: Int) -> Int {
+        var x = a
+        var y = b
+        while y != 0 {
+            (x, y) = (y, x % y)
+        }
+        return max(x, 1)
     }
 }

@@ -1,29 +1,24 @@
 #!/bin/bash
-# usage: start-atlas.sh local|pc
 set -euo pipefail
 
 ROOT="$HOME/workplace/atlas"
-PC_BASE="http://192.168.1.232:11434"
-WHISPER="$ROOT/argmax-oss-swift/Models/whisperkit-coreml/openai_whisper-large-v3-v20240930_626MB"
+LLM_BASE="http://192.168.1.232:8000"
 
-mode="${1:-}"
-[[ "$mode" == "local" || "$mode" == "pc" ]] || { echo "usage: $(basename "$0") local|pc" >&2; exit 1; }
 
-if [[ "$mode" == "pc" ]] && ! curl -sf --max-time 3 "$PC_BASE/api/version" >/dev/null; then
-  echo "warning: ollama not reachable at $PC_BASE - is atlas-ollama running on the PC?" >&2
+if ! curl -sf --max-time 3 "$LLM_BASE/v1/models" >/dev/null; then
+  echo "warning: vllm not reachable at $LLM_BASE - check 'sudo systemctl status vllm' on the desktop" >&2
 fi
+if ! timeout 3 bash -c "</dev/tcp/192.168.1.232/8767" 2>/dev/null; then
+  echo "warning: tts server not reachable - check 'sudo systemctl status atlas-tts' on the desktop" >&2
+fi
+if ! timeout 3 bash -c "</dev/tcp/192.168.1.232/8080" 2>/dev/null; then
+  echo "warning: stt server not reachable - check 'sudo systemctl status atlas-stt' on the desktop" >&2
+fi
+
 
 cmds=()
-if [[ "$mode" == "local" ]]; then
-  cmds+=("ollama serve")
-fi
 cmds+=("cd $ROOT/src/tool-server && uv run python app.py")
-cmds+=("cd $ROOT/src/client && swift build && swift run sttd $WHISPER")
-if [[ "$mode" == "pc" ]]; then
-  cmds+=("cd $ROOT/src/client && swift build && ATLAS_OLLAMA_URL=$PC_BASE/api/chat swift run atlas")
-else
-  cmds+=("cd $ROOT/src/client && swift build && swift run atlas")
-fi
+cmds+=("cd $ROOT/src/client && swift build && ATLAS_LLM_URL=$LLM_BASE/v1 swift run atlas")
 
 code "$ROOT"
 sleep 6

@@ -72,8 +72,9 @@ enum SystemPrompts {
         one, ask.
 
         # Active reminder
-        - When a reminder is active, follow the active-reminder system instruction.
-        - Do not claim that a reminder is complete unless acknowledge_reminder succeeds.
+        - When a reminder is active, follow the active reminder instruction.
+        - Never claim that a reminder is complete unless address_reminder returns
+        status "acknowledged".
 
         # Lights
         - For any light question or request, invoke the appropriate light tool before
@@ -85,9 +86,12 @@ enum SystemPrompts {
         """
 
     static let speakerContextInstruction = """
-        The current user's name is {SPEAKER_NAME}.
-        If asked by the user who they are or what their name is, answer directly with {SPEAKER_NAME}.
-        Use the name naturally when appropriate, always addressing the user by name when possible.
+        (System note — not spoken by the user: the current user's name is 
+        {SPEAKER_NAME}.)
+
+        If asked who they are or what their name is, answer directly with 
+        {SPEAKER_NAME}. Use the name naturally when appropriate, always 
+        addressing the user by name when possible.
         """
 
     static let reminderAnnouncementInstruction = """
@@ -136,49 +140,6 @@ enum SystemPrompts {
         Return only words Atlas should speak aloud.
         """
 
-    static let activeReminderResponseInstruction = """
-        A reminder is awaiting acknowledgement. Its text is provided below.
-
-        Speak naturally and directly. Never describe reasoning, policies, tools,
-        IDs, or internal behavior.
-
-        Default to acknowledging the active reminder. Call acknowledge_reminder unless
-        the user clearly says they are not done, are still working on it, want another
-        reminder, want it kept active, ask to repeat it, or explicitly say no.
-
-        Treat brief, imperfect, or indirect replies as acknowledgement, including
-        okay, all right, cool, sounds good, got it, thanks, I finished, and I think
-        I am finished.
-
-        If acknowledging, call acknowledge_reminder immediately with no spoken text
-        first. After successful acknowledgement, say briefly that the reminder was
-        marked complete.
-
-        If it should stay active, do not call the tool. Briefly say:
-        "Okay, I'll remind you again shortly."
-
-        Return only words Atlas should say aloud, except for required tool calls.
-        """
-
-    static let farewellInstruction = """
-        The user has ended the conversation.
-        Reply with a brief, warm farewell message. Do not mention tools,
-        reminders, internal behavior, or that the conversation is ending.
-        """
-
-    static let speakerFarewellInstruction = """
-        The current user's name is {SPEAKER_NAME}.
-        Always use {SPEAKER_NAME} naturally in the farewell.
-        """
-
-    static let speakerNameRequestInstruction = """
-        You don't recognize the current user's voice. In one short, warm 
-        sentence, ask for their name so you can remember them next time. Make 
-        it clearly optional — something like "no worries if you'd rather not" 
-        — so they don't feel pressured. Always start the conversation with 
-        "By the way".
-        """
-
     static let speakerNameExtractionInstruction = """
         You need to extract the user's name from their reply to the question "What's 
         your name?" If they clearly stated a name, respond with ONLY that 
@@ -187,20 +148,75 @@ enum SystemPrompts {
         said anything that isn't a name, respond with exactly: NO_NAME_PROVIDED
         """
 
+    static let activeReminderResponseInstruction = """
+        (System note — not spoken by the user: a reminder is awaiting 
+        acknowledgement. Its text is provided below.)
+
+        Call address_reminder exactly once, before saying anything else.
+
+        Set acknowledged to true only if the user's latest message contains a
+        clear, new statement that the underlying task itself is done,
+        dismissed, or cancelled — for example "I did it", "done", "never mind,
+        cancel it", or "please dismiss that."
+
+        Set acknowledged to false for everything else, including generic
+        acknowledgments of what you just said — such as "thanks", "okay",
+        "got it", "sounds good", "cool" — when they do not also state the
+        task is finished. This matters especially right after you have told
+        the user the reminder will repeat: a polite reply to that statement
+        is not a completion signal. When genuinely uncertain, prefer false;
+        the reminder will simply be asked about again later.
+
+        After the tool result returns, speak your reply from its status field
+        only — never assert completion independently. If status is
+        "acknowledged", briefly say the reminder was marked complete. If
+        status is "still_active", briefly say: "Okay, I'll remind you again
+        shortly."
+
+        Speak naturally and directly. Never describe reasoning, policies,
+        tools, IDs, or internal behavior. Return only words Atlas should say
+        aloud, except for the required tool call.
+        """
+
+    static let farewellInstruction = """
+        (System note — not spoken by the user: the conversation is ending.)
+
+        Reply with a brief, warm farewell. If a system message has given you 
+        the user's name, use it naturally. Do not mention tools, reminders, 
+        internal behavior, or that the conversation is ending. Then stop; 
+        ask nothing.
+        """
+
+    static let speakerNameRequestInstruction = """
+        (System note — not spoken by the user: their voice was not recognized, 
+        so you may ask for their name to remember them next time.)
+
+        Ask in one short, warm sentence. Make it clearly optional — something 
+        like "no worries if you'd rather not" — so they don't feel pressured. 
+        Always start your reply with "By the way".
+        """
+
     static let speakerEnrollmentAcknowledgementInstruction = """
-        The user just told you their name. Respond with one short, warm 
-        sentence acknowledging it — e.g. greeting them by name. Then stop; do not 
-        ask a follow-up question.
+        (System note — not spoken by the user: their latest message told you 
+        their name.)
+
+        Respond with one short, warm sentence acknowledging it — for example, 
+        greet them by name. Then stop; do not ask a follow-up question.
         """
 
     static let speakerEnrollmentDeclineInstruction = """
-        The user chose not to share their name. Respond with one short, 
-        warm sentence letting them know that's completely fine, then continue 
-        the conversation naturally without dwelling on it.
+        (System note — not spoken by the user: they chose not to share 
+        their name.)
+
+        Respond with one short, warm sentence letting them know that's 
+        completely fine, then continue the conversation naturally without 
+        dwelling on it.
         """
 
     static let conversationClosingInstruction = """
-        The user has indicated they are finished with this conversation. 
+        (System note — not spoken by the user: they have indicated they are 
+        finished with this conversation.)
+
         Respond to their final request normally, then close the conversation 
         with a brief, natural goodbye. Do not end with a follow-up question 
         (for example, "Is there anything else?") — the conversation ends 
@@ -208,11 +224,12 @@ enum SystemPrompts {
         """
 
     static let conversationClosingWithReminderInstruction = """
-        The user has acknowledged their active reminder and indicated they 
-        are finished with this conversation. You must first let them know 
-        that their reminder was acknowledged, then respond to their final 
-        request if there is one, then close with a short, natural goodbye. 
-        Do not end with a follow-up question (for example, "Is there 
+        (System note — not spoken by the user: they have acknowledged their 
+        active reminder and indicated they are finished with this conversation.)
+
+        First briefly confirm their reminder was acknowledged, then respond to 
+        their final request if there is one, then close with a short, natural 
+        goodbye. Do not end with a follow-up question (for example, "Is there 
         anything else?") — the conversation ends after this reply.
         """
 }

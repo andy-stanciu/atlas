@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 
 struct ConversationResult: Sendable {
     let reply: String
@@ -21,7 +22,7 @@ enum ConversationEngineError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .emptyResponse:
-            return "Ollama returned neither tool calls nor spoken text."
+            return "LLM returned neither tool calls nor spoken text."
 
         case .toolLoopExceeded:
             return "Tool loop exceeded its maximum number of steps."
@@ -34,24 +35,29 @@ enum ConversationEngineError: LocalizedError, Equatable {
 
         case .reminderAcknowledgementNotInvoked:
             return """
-                The model claimed an active reminder was acknowledged without a \
-                successful acknowledge_reminder call.
+                The tool loop exhausted its steps without an address_reminder \
+                call while a reminder was active.
                 """
         }
     }
 }
 
+private let reminderAddressTool = "address_reminder"
+
 final class ConversationEngine: @unchecked Sendable {
-    private let ollama: any OllamaServing
+    private let llm: any LLMServing
     private let toolServer: any ToolServing
+    private let preloadedTools: [ToolDefinition]?
     private let maxSteps: Int
     private let systemPrompt: String
     private let normalize: (String) -> String
     private let onToolBatch: @Sendable ([ToolCall]) async -> Void
+    private let onTextDelta: (String) -> Void
 
     init(
-        ollama: any OllamaServing,
+        llm: any LLMServing,
         toolServer: any ToolServing,
+        preloadedTools: [ToolDefinition]? = nil,
         maxSteps: Int = Config.maxToolLoopSteps,
         systemPrompt: String = SystemPrompts.mainSystemPrompt,
         normalize: @escaping (String) -> String = {
@@ -77,14 +83,18 @@ final class ConversationEngine: @unchecked Sendable {
                 .trimmingCharacters(
                     in: .whitespacesAndNewlines
                 )
-        }, onToolBatch: @escaping @Sendable ([ToolCall]) async -> Void = { _ in }
+        },
+        onToolBatch: @escaping @Sendable ([ToolCall]) async -> Void = { _ in },
+        onTextDelta: @escaping (String) -> Void = { _ in }
     ) {
-        self.ollama = ollama
+        self.llm = llm
         self.toolServer = toolServer
+        self.preloadedTools = preloadedTools
         self.maxSteps = maxSteps
         self.systemPrompt = systemPrompt
         self.normalize = normalize
         self.onToolBatch = onToolBatch
+        self.onTextDelta = onTextDelta
     }
 
     func respond(
@@ -93,67 +103,83 @@ final class ConversationEngine: @unchecked Sendable {
             Message(role: "system", content: SystemPrompts.mainSystemPrompt)
         ],
         activeReminderText: String? = nil,
-        speakerInstruction: String? = nil
+        speakerInstruction: String? = nil,
+        trailingInstructions: [String] = []
     ) async throws -> ConversationResult {
         var messages = history
-
+        var durableMessages = history
+        var boundary: [String] = []
         if let speakerInstruction {
-            messages.append(
-                Message(
-                    role: "system",
-                    content: speakerInstruction
-                )
-            )
+            boundary.append(speakerInstruction)
         }
-
         if let activeReminderText {
-            messages.append(
-                Message(
-                    role: "system",
-                    content: SystemPrompts.activeReminderResponseInstruction
-                )
+            boundary.append(SystemPrompts.activeReminderResponseInstruction)
+            boundary.append(
+                """
+                Active reminder text:
+                \(activeReminderText)
+                """
             )
+        }
+        boundary.append(contentsOf: trailingInstructions)
 
+        let userMessage = Message(role: "user", content: userText)
+        messages.append(userMessage)
+        durableMessages.append(userMessage)
+
+        if !boundary.isEmpty {
             messages.append(
-                Message(
-                    role: "system",
-                    content: """
-                        Active reminder text:
-                        \(activeReminderText)
-                        """
-                )
+                Message(role: "user", content: boundary.joined(separator: "\n\n"))
             )
         }
 
-        messages.append(
-            Message(role: "user", content: userText)
-        )
-
-        let tools = try await toolServer.availableTools()
+        let tools: [ToolDefinition]
+        if let preloadedTools {
+            tools = preloadedTools
+        } else {
+            tools = try await toolServer.availableTools()
+        }
 
         var attemptedToolNames: [String] = []
         var successfulToolNames: [String] = []
         var toolCalls: [ToolCall] = []
         var toolResults: [String] = []
-        var activeReminderAcknowledged = false
-        var retriedReminderAcknowledgement = false
+        var reminderAddressed = activeReminderText == nil
 
         for step in 0..<maxSteps {
             try Task.checkCancellation()
-            let assistantMessage = try await ollama.chat(
+            let passStart = CACurrentMediaTime()
+            var firstTokenLogged = false
+            let toolChoice: LLMClient.ToolChoice? =
+                reminderAddressed ? nil : .function(name: reminderAddressTool)
+            let assistantMessage = try await llm.chatStream(
                 messages: messages,
-                tools: tools
+                tools: tools,
+                toolChoice: toolChoice,
+                onDelta: { delta in
+                    if !firstTokenLogged {
+                        firstTokenLogged = true
+                        Log.timing(
+                            "LLM prefill: "
+                                + String(
+                                    format: "%.3f",
+                                    CACurrentMediaTime() - passStart
+                                ) + "s"
+                        )
+                    }
+                    onTextDelta(delta)
+                }
             )
 
             let calls = assistantMessage.toolCalls ?? []
 
-            messages.append(
-                Message(
-                    role: "assistant",
-                    content: assistantMessage.content,
-                    toolCalls: calls
-                )
+            let assistantHistoryMessage = Message(
+                role: "assistant",
+                content: assistantMessage.content,
+                toolCalls: calls
             )
+            messages.append(assistantHistoryMessage)
+            durableMessages.append(assistantHistoryMessage)
 
             if !calls.isEmpty {
                 Log.toolLoop("step \(step + 1)")
@@ -175,15 +201,16 @@ final class ConversationEngine: @unchecked Sendable {
                     Log.toolResult(call.function.name, result)
                     if toolSucceeded(result) {
                         successfulToolNames.append(call.function.name)
-
-                        if call.function.name == "acknowledge_reminder" {
-                            activeReminderAcknowledged = true
-                        }
                     }
-
-                    messages.append(
-                        Message(role: "tool", content: result)
+                    if call.function.name == reminderAddressTool {
+                        reminderAddressed = true
+                    }
+                    let toolHistoryMessage = Message(
+                        role: "tool",
+                        content: result
                     )
+                    messages.append(toolHistoryMessage)
+                    durableMessages.append(toolHistoryMessage)
                 }
 
                 continue
@@ -194,44 +221,16 @@ final class ConversationEngine: @unchecked Sendable {
             )
 
             if reply.isEmpty {
-                messages.append(
-                    Message(
-                        role: "user",
-                        content: """
-                            You returned neither a tool call nor spoken text.
-                            Return one short natural spoken response, or invoke the
-                            required native tool now.
-                            """
-                    )
+                let retryMessage = Message(
+                    role: "user",
+                    content: """
+                        You returned neither a tool call nor spoken text.
+                        Return one short natural spoken response, or invoke the
+                        required native tool now.
+                        """
                 )
-                continue
-            }
-
-            if activeReminderText != nil,
-                !activeReminderAcknowledged,
-                claimsReminderAcknowledgement(reply)
-            {
-                if retriedReminderAcknowledgement {
-                    throw ConversationEngineError
-                        .reminderAcknowledgementNotInvoked
-                }
-
-                retriedReminderAcknowledgement = true
-
-                messages.append(
-                    Message(
-                        role: "user",
-                        content: """
-                            Validation failure: you claimed the active reminder was
-                            completed, dismissed, or acknowledged without a successful
-                            acknowledge_reminder tool call.
-
-                            Invoke acknowledge_reminder now if the user completed or
-                            dismissed it. Otherwise speak naturally without claiming
-                            completion.
-                            """
-                    )
-                )
+                messages.append(retryMessage)
+                durableMessages.append(retryMessage)
                 continue
             }
 
@@ -241,8 +240,12 @@ final class ConversationEngine: @unchecked Sendable {
                 toolResults: toolResults,
                 attemptedToolNames: attemptedToolNames,
                 successfulToolNames: successfulToolNames,
-                finalMessages: messages
+                finalMessages: durableMessages
             )
+        }
+
+        if !reminderAddressed {
+            throw ConversationEngineError.reminderAcknowledgementNotInvoked
         }
 
         throw ConversationEngineError.toolLoopExceeded
@@ -253,25 +256,5 @@ final class ConversationEngine: @unchecked Sendable {
             ToolSuccessResponse.self,
             from: Data(result.utf8)
         ))?.ok == true
-    }
-
-    private func claimsReminderAcknowledgement(
-        _ text: String
-    ) -> Bool {
-        let normalized = normalize(text)
-
-        return [
-            "has been marked complete",
-            "is marked complete",
-            "marked that reminder complete",
-            "marked the reminder complete",
-            "marked it complete",
-            "reminder is complete",
-            "reminder has been completed",
-            "reminder has been marked complete",
-            "cancelled the reminder",
-            "canceled the reminder",
-            "dismissed the reminder",
-        ].contains(where: normalized.contains)
     }
 }

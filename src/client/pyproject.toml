@@ -1,7 +1,7 @@
 [project]
 name = "atlas-client"
 version = "0.1.0"
-description = "Atlas local TTS worker"
+description = "Atlas TTS dependencies"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

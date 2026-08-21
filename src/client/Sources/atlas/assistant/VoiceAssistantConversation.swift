@@ -3,6 +3,7 @@ import Foundation
 extension VoiceAssistant {
 
     func beginConversation() {
+        LLMPrefixStability.reset()
         lock.withLock {
             shouldEndConversationAfterSpeech = false
             conversationActive = true
@@ -13,12 +14,15 @@ extension VoiceAssistant {
                 Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
+        PersistentLog.beginConversation()
+        Task { await prefetchTools() }
         soundEffects.play("startup")
         Log.blank()
         Log.system("Atlas is listening.")
     }
 
     func beginReminderConversation() {
+        LLMPrefixStability.reset()
         lock.withLock {
             shouldEndConversationAfterSpeech = false
             conversationActive = true
@@ -29,9 +33,10 @@ extension VoiceAssistant {
                 Message(role: "system", content: SystemPrompts.mainSystemPrompt)
             ]
         }
+        PersistentLog.beginConversation()
+        Task { await prefetchTools() }
         Log.blank()
         Log.system("Atlas is listening for your reminder response.")
-        resetConversationTimeout()
     }
 
     func scheduleConversationEndAfterSpeech() {
@@ -85,10 +90,30 @@ extension VoiceAssistant {
         }
 
         if didEnd {
+            LLMPrefixStability.reset()
+            clearTools()
             soundEffects.play("shutdown")
             Log.blank()
             Log.system("Atlas conversation ended. Say “Hey Atlas” to start again.")
         }
+    }
+
+    func prefetchTools() async {
+        if lock.withLock({ cachedTools != nil }) { return }
+        if let tools = try? await toolServer.availableTools() {
+            lock.withLock { cachedTools = tools }
+        }
+    }
+
+    func clearTools() {
+        lock.withLock { cachedTools = nil }
+    }
+
+    func toolsForTurn() async throws -> [ToolDefinition] {
+        if let tools = lock.withLock({ cachedTools }) { return tools }
+        let tools = try await toolServer.availableTools()
+        lock.withLock { cachedTools = tools }
+        return tools
     }
 
     func cancelConversationTimeout() {

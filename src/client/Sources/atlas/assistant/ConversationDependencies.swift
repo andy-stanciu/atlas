@@ -1,9 +1,11 @@
 import Foundation
 
-protocol OllamaServing: Sendable {
-    func chat(
+protocol LLMServing: Sendable {
+    func chatStream(
         messages: [Message],
         tools: [ToolDefinition],
+        toolChoice: LLMClient.ToolChoice?,
+        onDelta: (String) -> Void
     ) async throws -> Message
 }
 
@@ -12,16 +14,21 @@ protocol ToolServing: Sendable {
     func runTool(_ call: ToolCall) async throws -> String
 }
 
-extension OllamaClient: OllamaServing {
-    func chat(
+extension LLMClient: LLMServing {
+    func chatStream(
         messages: [Message],
-        tools: [ToolDefinition]
+        tools: [ToolDefinition],
+        toolChoice: ToolChoice?,
+        onDelta: (String) -> Void
     ) async throws -> Message {
-        try await chat(
+        try await chatStream(
             messages: messages,
             tools: tools,
-            temperature: Config.ollamaDefaultTemperature
+            temperature: Config.llmDefaultTemperature,
+            toolChoice: toolChoice,
+            onDelta: onDelta
         )
     }
 }
+
 extension ToolServerClient: ToolServing {}
