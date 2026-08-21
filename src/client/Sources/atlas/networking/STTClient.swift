@@ -22,6 +22,8 @@ actor STTClient {
     private static let frameSamples = 480  // 20ms @ 24kHz, matches the server's encoder step
     private static let sttDelaySeconds = 0.5  // kyutai/stt-1b-en_fr's inherent algorithmic delay
     private static let flushFrames = Int((sttDelaySeconds / 0.02).rounded(.up)) + 1
+    private static let quietThreshold: CFAbsoluteTime = 0.15  // how long transcript must be stable before we return
+    private static let pollInterval: UInt64 = 30_000_000  // 30ms
 
     private let serverURL: URL
     private let apiKey: String
@@ -30,6 +32,7 @@ actor STTClient {
     private var receiveLoop: Task<Void, Never>?
     private var transcript = ""
     private var lastServerError: Error?
+    private var lastWordReceivedAt: CFAbsoluteTime?
 
     private var pendingSamples: [Float] = []
     private var totalInputSamplesConsumed = 0
@@ -76,6 +79,7 @@ actor STTClient {
         task = newTask
         transcript = ""
         lastServerError = nil
+        lastWordReceivedAt = nil
         pendingSamples = []
         totalInputSamplesConsumed = 0
         nextOutputIndex = 0
@@ -110,7 +114,16 @@ actor STTClient {
             try await send(frame: silence, task: task)
         }
 
-        try await Task.sleep(nanoseconds: UInt64((Self.sttDelaySeconds + 0.3) * 1_000_000_000))
+        let flushSentAt = CFAbsoluteTimeGetCurrent()
+        let deadline = flushSentAt + Self.sttDelaySeconds + 0.3
+
+        while CFAbsoluteTimeGetCurrent() < deadline {
+            try await Task.sleep(nanoseconds: Self.pollInterval)
+            let quietSince = lastWordReceivedAt ?? flushSentAt
+            if CFAbsoluteTimeGetCurrent() - quietSince >= Self.quietThreshold {
+                break
+            }
+        }
 
         let result = transcript
         let error = lastServerError
@@ -152,6 +165,7 @@ actor STTClient {
             case "Word":
                 if case .string(let text) = fields["text"] ?? .null {
                     transcript += (transcript.isEmpty ? "" : " ") + text
+                    lastWordReceivedAt = CFAbsoluteTimeGetCurrent()
                 }
             case "Error":
                 if case .string(let message) = fields["message"] ?? .null {
