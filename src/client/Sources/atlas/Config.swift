@@ -1,9 +1,6 @@
 import Foundation
 
 struct Config {
-    static let whisperKitModelFolder =
-        "\(NSHomeDirectory())/workplace/atlas/argmax-oss-swift/Models/whisperkit-coreml/openai_whisper-large-v3-v20240930_626MB"
-
     static let llmURL = URL(
         string: ProcessInfo.processInfo.environment["ATLAS_LLM_URL"]
             ?? "http://192.168.1.232:8000/v1"
@@ -13,6 +10,12 @@ struct Config {
         ProcessInfo.processInfo.environment["ATLAS_TTS_HOST"]
         ?? "192.168.1.232"
     static let ttsServerPort = 8767
+
+    static let sttServerHost =
+        ProcessInfo.processInfo.environment["ATLAS_STT_HOST"]
+        ?? "192.168.1.232"
+    static let sttServerPort = 8080
+    static let sttServerAPIKey = "public_token"
 
     static let toolServerURL = URL(
         string: "http://127.0.0.1:8090"
@@ -53,7 +56,7 @@ struct Config {
     static let historyTrimTarget = 14
 
     // Audio interface settings
-    static let speechThreshold: Float = 0.025
+    static let speechThreshold: Float = 0.035
     static let speechPeakThreshold: Float = 0.08
     static let startSpeechFrames = 4
     static let interruptSpeechFrames = 4
@@ -63,9 +66,6 @@ struct Config {
 
     static let conversationTimeoutSeconds: TimeInterval = 7.0
     static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
-
-    static let idleRotationSeconds: Double = 10
-    static let idleRotationCarryoverMilliseconds = 2000
 
     static let speakerReinforceThreshold = 0.60
     static let speakerReinforceMinimumDurationSeconds = 3.0

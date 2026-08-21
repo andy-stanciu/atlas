@@ -22,7 +22,7 @@ extension VoiceAssistant {
 
             guard let client else {
                 Log.blank()
-                Log.system("Not connected to sttd, dropping turn.")
+                Log.system("Not connected to the Atlas STT server, dropping turn.")
                 transitionToListening()
                 return
             }
@@ -210,53 +210,6 @@ extension VoiceAssistant {
             playThinkingFiller: Config.lowLatencyMode ? false : !wakeOnly,
             onCompletion: onCompletion
         )
-    }
-
-    func processRotatedTurn(
-        pcm: Data,
-        sampleRate: Double,
-        transcript: String
-    ) async {
-        let active = lock.withLock { conversationActive }
-        guard !active, isWakeGreeting(transcript) else {
-            return
-        }
-
-        do {
-            let wavURL = try writeTemporaryWAV(
-                pcm: pcm,
-                sampleRate: Int(sampleRate.rounded())
-            )
-            defer {
-                try? FileManager.default.removeItem(at: wavURL)
-            }
-
-            let claimed = lock.withLock { () -> Bool in
-                guard state == .recording else {
-                    return false
-                }
-                state = .processing
-                recording = Data()
-                speechFrames = 0
-                silenceFrames = 0
-                clearPreRoll()
-                return true
-            }
-            guard claimed else {
-                return
-            }
-            cancelRecognizerSession()
-
-            try await processRecognizedTurn(
-                transcript: transcript,
-                wavURL: wavURL
-            )
-        } catch {
-            Log.system(
-                "[pipeline error] \(error.localizedDescription)"
-            )
-            transitionToListening()
-        }
     }
 
     func beginGenerationTurn(
