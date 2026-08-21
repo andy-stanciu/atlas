@@ -28,7 +28,7 @@ extension VoiceAssistant {
             }
 
             let transcript = try await timed("STT") {
-                try await client.finish()
+                TranscriptCorrection.apply(try await client.finish())
             }
 
             guard !transcript.isEmpty else {
