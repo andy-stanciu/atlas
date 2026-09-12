@@ -1,3 +1,5 @@
+# TODO: Update this readme. It is totally outdated.
+
 # Atlas
 
 A local-first voice assistant for the home. Atlas listens for a wake greeting, holds spoken conversations, recognizes who's talking, and controls the house through a companion tool server — all on your own hardware, with no cloud services involved.

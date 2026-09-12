@@ -51,7 +51,8 @@ struct Config {
     static let llmMaxTokens = 400
     static let maxToolLoopSteps = 16
     static let lowLatencyMode = true
-    static let verboseToolCalling = true
+    static let verboseToolCalling = false
+    static let enableToolCallSfx = true
     static let llmPrefixStabilityCheck = false
     static let maxHistoryMessages = 24
     static let historyTrimTarget = 14

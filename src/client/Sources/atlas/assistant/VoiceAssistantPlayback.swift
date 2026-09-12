@@ -139,16 +139,15 @@ extension VoiceAssistant {
         guard isCurrentTurn(turnID) else {
             return
         }
-        if !Config.verboseToolCalling {
-            return
-        }
-        if let toolName {
+        if Config.verboseToolCalling, let toolName {
             soundEffects.play(
                 "tool_\(toolName)",
                 volume: Config.speakingVolume
             )
         }
-        soundEffects.play("tool_call")
+        if Config.enableToolCallSfx {
+            soundEffects.play("tool_call")
+        }
     }
 
     func startNotificationCoordinator() {
