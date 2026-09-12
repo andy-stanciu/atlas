@@ -8,7 +8,7 @@ enum PersistentLog {
 
     private static let lock = NSLock()
 
-    private static let sessionURL: URL? = {
+    private static let session: (url: URL, transcriptHandle: FileHandle?)? = {
         guard Config.persistentLogMode else { return nil }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
@@ -16,17 +16,26 @@ enum PersistentLog {
             .appendingPathComponent("session-\(formatter.string(from: Date()))")
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            return url
         } catch {
             Log.system(
                 "[persistent log] could not create session folder: \(error.localizedDescription)")
             return nil
         }
+
+        let transcriptURL = url.appendingPathComponent("full-transcript.txt")
+        var handle: FileHandle?
+        if FileManager.default.createFile(atPath: transcriptURL.path, contents: nil) {
+            handle = try? FileHandle(forWritingTo: transcriptURL)
+        }
+        return (url, handle)
     }()
+
+    private static var sessionURL: URL? { session?.url }
 
     private static var nextConversationID = 1
     private static var currentConversationURL: URL?
     private static var nextTurnID = 1
+    private static var conversationTranscriptHandle: FileHandle?
 
     static func beginConversation() {
         guard let sessionURL else { return }
@@ -37,6 +46,21 @@ enum PersistentLog {
             let url = sessionURL.appendingPathComponent("conversation-\(id)")
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             currentConversationURL = url
+
+            conversationTranscriptHandle?.closeFile()
+            conversationTranscriptHandle = nil
+            let transcriptURL = url.appendingPathComponent("conversation-transcript.txt")
+            if FileManager.default.createFile(atPath: transcriptURL.path, contents: nil) {
+                conversationTranscriptHandle = try? FileHandle(forWritingTo: transcriptURL)
+            }
+        }
+    }
+
+    static func appendTranscript(_ text: String) {
+        lock.withLock {
+            let data = Data(text.utf8)
+            session?.transcriptHandle?.write(data)
+            conversationTranscriptHandle?.write(data)
         }
     }
 

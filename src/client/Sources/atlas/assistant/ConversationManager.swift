@@ -1,6 +1,6 @@
 final class SentenceAccumulator: @unchecked Sendable {
     private var pending = ""
-    private let softFlushMinimumCharacters = 60
+    private let sentenceFlushMinimumCharacters = 50
 
     func append(_ text: String) -> [String] {
         pending += text
@@ -56,43 +56,23 @@ final class SentenceAccumulator: @unchecked Sendable {
             let followedBySpace =
                 next < text.endIndex && text[next].isWhitespace
 
-            let isDash =
-                character == "—" || character == "–"
-                || (character == "-" && isSpacedHyphen(index, in: text))
-            let isHard =
+            let isTerminator =
                 character == "." || character == "!"
                 || character == "?" || character == "…"
-            let isSoft =
-                isDash || character == "," || character == ";"
-                || character == ":"
 
-            guard isHard || isSoft else { continue }
-            guard isDash || followedBySpace else {
+            guard isTerminator, followedBySpace else {
                 continue
             }
 
-            if !isHard {
-                let length = text.distance(from: text.startIndex, to: index)
-                guard length >= softFlushMinimumCharacters else {
-                    continue
-                }
+            let length = text.distance(from: text.startIndex, to: index)
+            guard length >= sentenceFlushMinimumCharacters else {
+                continue
             }
 
             return index..<next
         }
 
         return nil
-    }
-
-    private func isSpacedHyphen(
-        _ index: String.Index,
-        in text: String
-    ) -> Bool {
-        guard index > text.startIndex else { return false }
-        let after = text.index(after: index)
-        guard after < text.endIndex else { return false }
-        return text[text.index(before: index)].isWhitespace
-            && text[after].isWhitespace
     }
 
     private func bestSplitIndex(

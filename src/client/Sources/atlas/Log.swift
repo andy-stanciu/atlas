@@ -30,6 +30,7 @@ enum Log {
     ) {
         if lineIsOpen, terminator != "" {
             Swift.print("")
+            appendToTranscript("\n")
             lineIsOpen = false
         }
 
@@ -38,17 +39,25 @@ enum Log {
         } else {
             Swift.print(text, terminator: terminator)
         }
+        appendToTranscript(text + terminator)
 
         lineIsOpen = terminator.isEmpty
         fflush(stdout)
     }
 
+    private static func appendToTranscript(_ text: String) {
+        guard Config.persistentLogMode else { return }
+        PersistentLog.appendTranscript(text)
+    }
+
     static func blank() {
         if lineIsOpen {
             Swift.print("")
+            appendToTranscript("\n")
             lineIsOpen = false
         }
         Swift.print("")
+        appendToTranscript("\n")
         fflush(stdout)
     }
 
