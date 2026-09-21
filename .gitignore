@@ -11,7 +11,9 @@ uv.lock
 src/tool-server/data/
 src/tool-server/temp-audio/
 logs/
-
+lockfile
+state.json
+.env
 # macOS
 .DS_Store
 

@@ -7,6 +7,7 @@ from registry import ToolRegistry
 from repository import Repository
 from scheduler import Scheduler
 from services import AtlasService
+from music import MusicService
 
 
 def create_app():
@@ -22,10 +23,10 @@ def create_app():
     repository = Repository()
     repository.initialize()
     speaker_service = SpeakerService(repository)
-
+    music = MusicService()
     lights = LightService()
     service = AtlasService(repository)
-    registry = ToolRegistry(TOOLS_PATH, service, lights)
+    registry = ToolRegistry(TOOLS_PATH, service, lights, music)
     scheduler = Scheduler(repository, lights, SCHEDULER_INTERVAL_SECONDS)
 
     app.extensions["repository"] = repository

@@ -3,6 +3,22 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).parent
+
+
+def _load_env_file():
+    path = ROOT / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_env_file()
+
 DATABASE_PATH = Path(
     os.environ.get("ATLAS_DATABASE_PATH", ROOT / "data" / "atlas_v2.db")
 )
@@ -10,6 +26,10 @@ TOOLS_PATH = ROOT / "tools.json"
 HOST = "127.0.0.1"
 PORT = 8090
 TIMEZONE = ZoneInfo("America/Los_Angeles")
+LIBRESPOT_URL = os.environ.get("ATLAS_LIBRESPOT_URL", "http://127.0.0.1:3678")
+LIBRESPOT_TIMEOUT = 5
+SPOTIFY_CLIENT_ID = os.environ.get("ATLAS_SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("ATLAS_SPOTIFY_CLIENT_SECRET", "")
 SCHEDULER_INTERVAL_SECONDS = 0.5
 
 SPEAKER_MODEL_NAME = "speechbrain/spkrec-ecapa-voxceleb"

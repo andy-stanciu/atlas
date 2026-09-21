@@ -1,14 +1,22 @@
 import json
 from pathlib import Path
 from lights import LightService
+from music import MusicService
 from time_utils import ValidationError, current_datetime
 
 
 class ToolRegistry:
-    def __init__(self, tools_path: Path, service, lights: LightService):
+    def __init__(
+        self,
+        tools_path: Path,
+        service,
+        lights: LightService,
+        music: MusicService,
+    ):
         self.tools = load_tools(tools_path)
         self.service = service
         self.lights = lights
+        self.music = music
 
     def run(self, name, arguments):
         if not isinstance(arguments, dict):
@@ -21,12 +29,19 @@ class ToolRegistry:
                 arguments.get("room"), arguments.get("power")
             ),
             "schedule_reminder": lambda: self.service.schedule_reminder(arguments),
-            "list_reminders": self.service.list_reminders,
+            "list_reminders": lambda: self.service.list_reminders,
             "cancel_reminder": lambda: self.service.cancel_reminder(arguments),
             "address_reminder": lambda: self.service.address_reminder(arguments),
             "schedule_sequence": lambda: self.service.schedule_sequence(arguments),
-            "list_sequences": self.service.list_sequences,
+            "list_sequences": lambda: self.service.list_sequences,
             "cancel_sequence": lambda: self.service.cancel_sequence(arguments),
+            "music_play": lambda: self.music.play(arguments.get("query")),
+            "music_pause": self.music.pause,
+            "music_resume": self.music.resume,
+            "music_skip": self.music.skip,
+            "music_previous": self.music.previous,
+            "music_volume": lambda: self.music.volume(arguments.get("percent")),
+            "music_status": self.music.status,
         }
 
         handler = handlers.get(name)
@@ -38,6 +53,8 @@ class ToolRegistry:
             return handler()
         except ValidationError as error:
             return {"ok": False, "error": str(error)}
+        except Exception as error:
+            return {"ok": False, "error": f"{type(error).__name__}: {error}"}
 
 
 def load_tools(path):

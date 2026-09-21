@@ -33,6 +33,7 @@ struct Config {
     static let printSpeakerDebug = false
     static let printToolCallDebug = true
     static let printEndpointDebug = true
+    static let printMusicDebug = true
 
     static let debugMicRecordingPath = "/tmp/atlas-mic-debug.wav"
     static let debugMicRecordingSeconds = 60
@@ -45,7 +46,7 @@ struct Config {
     static let reminderMaxAnnouncements = 20
 
     // LLM / tool config
-    static let llmModel = "qwen3.5:9b"
+    static let llmModel = "qwen3.8:27b"
     static let llmDefaultTemperature = 0.2
     static let llmConversationalTemperature = 0.9
     static let llmMaxTokens = 400
@@ -57,6 +58,13 @@ struct Config {
     static let maxHistoryMessages = 24
     static let historyTrimTarget = 14
 
+    // Music config
+    static let musicFIFOPath = "/tmp/atlas-music.fifo"
+    static let musicSourceSampleRate: Double = 44_100
+    static let musicDownlinkSampleRate: Double = 48_000
+    static let musicMaxVolume: Float = 0.75
+    static let musicDuckGain: Float = 0.15
+
     // Audio interface settings
     static let audioFrameMilliseconds: Double = 20
     static let speechThreshold: Float = 0.035
@@ -67,7 +75,7 @@ struct Config {
     static let minimumRecordingBytes = 2_000
     static let preRollMilliseconds = 500
     static let speculativeEndpointingEnabled = true
-    static let speculativePauseScoreThreshold: Double = 0.6
+    static let speculativePauseScoreThreshold: Double = 0.7
     static let speculativeEarlySilenceFrames = 15  // ~300ms at 20ms/frame
 
     static let conversationTimeoutSeconds: TimeInterval = 7.0

@@ -14,6 +14,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include <fcntl.h>
@@ -39,13 +40,16 @@ namespace esphome
       FRAME_MIC = 0x01,
       FRAME_TTS = 0x02,
       FRAME_CTRL = 0x03,
-      FRAME_EVENT = 0x04
+      FRAME_EVENT = 0x04,
+      FRAME_MUSIC = 0x05
     };
     enum ControlCmd : uint8_t
     {
       CTRL_FLUSH = 0x01,
       CTRL_TTS_START = 0x02,
-      CTRL_SET_STATE = 0x03
+      CTRL_SET_STATE = 0x03,
+      CTRL_MUSIC_STOP = 0x04,
+      CTRL_MUSIC_DUCK = 0x05
     };
     enum EventCode : uint8_t
     {
@@ -63,12 +67,49 @@ namespace esphome
     };
 
     // Uplink: the forked i2s_audio mic delivers 16 kHz s32 stereo; we extract
-    // left-channel s16le. Downlink: 24 kHz s16le mono on the wire (halves the
-    // TCP load vs 48 k, and matches Kokoro's native rate); the device upsamples
-    // 2x (half-band FIR, polyphase form) to the 48 kHz stereo stream the I2S
-    // bus (and XVF3800 AEC reference) requires.
+    // left-channel s16le. Downlink voice: 24 kHz s16le mono on the wire; the
+    // device upsamples 2x (half-band FIR, polyphase form) to the 48 kHz stereo
+    // stream the I2S bus (and XVF3800 AEC reference) requires. Downlink music:
+    // 48 kHz s16le stereo frames (MUSIC_BYTES each), pushed into a deep PSRAM
+    // ring.
+    // Voice and music are mixed in the output task: out = voice + music * duck.
+    // CTRL_MUSIC_DUCK (u8 0..255) sets the target gain; the client's max
+    // volume and duck depth are encoded there, so the satellite stays
+    // volume-policy-free. The ramp is asymmetric: falling fast (~80 ms full
+    // range, barge-in must win immediately), rising slow (~1 s full range,
+    // gentle restores).
+    // Music fade-in: the gain zeroes on the absent -> live transition of the
+    // MUSIC stream (not the speaker's playing flag, which is sticky across
+    // cues and speech — the v9 bug where songs started loud). Every track
+    // start, track change, and pause-resume has a stream gap and fades in;
+    // continuous playback does not.
+    // CTRL_FLUSH clears the voice ring only; music keeps playing ducked.
+    // The two downlink pacers (TTS bursts, music) jitter against each other by
+    // milliseconds; mixing a frame while a live stream's frame is momentarily
+    // late zero-pads that stream and chops both at the jitter rate. Before
+    // mixing, the task holds up to MIX_HOLD_MS for a late-but-live stream.
+    // "Live" for HOLD purposes means the stream's last frame arrived within a
+    // few frame periods (VOICE/MUSIC_HOLD_LIVE_MS) — NOT a long window: a
+    // long window holds across sentence gaps and after a stream ends,
+    // starving the speaker ring.
+    // Output rate cap: while playing, the task emits at most one output frame
+    // per 20 ms of wall clock. No upstream behavior — client pacing failure,
+    // prebuffer floods, bursty TCP — can outrun the DAC; excess music fills
+    // the ring and hits the flood guard below instead of the speaker ring.
+    // Flood guard: above MUSIC_RING_TRIM_FRAMES (above the largest legitimate
+    // TCP burst, below sustained realtime) the task discards contiguous whole
+    // frames — a flood becomes a clean forward skip at correct tempo instead
+    // of chipmunk chop.
+    // The output task NEVER free-runs and NEVER stops the speaker on its own.
+    // It drains the rings far faster than the 20 ms frame pace, so empty rings
+    // are the steady state between paced frames: the task waits for the next
+    // notification instead of padding silence. Only CTRL_FLUSH, teardown and
+    // CTRL_MUSIC_STOP-with-voice-idle stop the speaker.
+    // EVERY mix pops one frame from each non-empty ring: an undrained ring
+    // makes `hm` true forever and the task free-runs on stale buffer contents
+    // (the v3 bug).
     // TTS frames are dropped unless the gate is open (CTRL_TTS_START opens,
-    // CTRL_FLUSH closes + stops speaker), so in-flight frames after a flush
+    // CTRL_FLUSH closes + clears voice), so in-flight frames after a flush
     // cannot restart playback.
     // A full speaker ring means we are AHEAD of playback: drop rather than
     // block. Sends are bounded: a dead peer costs a reconnect, not a wedge.
@@ -81,8 +122,22 @@ namespace esphome
     // so transitions always start dark.
     // The FIR output buffer is allocated once and reused: per-frame heap churn
     // fragments internal SRAM, which is shared with I2S DMA and lwIP pbufs.
+    // spk_->play()/stop() are called only from the output task (and, for stop,
+    // from flush/teardown under spk_mtx_): the i2s_audio speaker is not safe
+    // for concurrent calls.
     static constexpr size_t FRAME_SAMPLES = 320;             // 20 ms @ 16 kHz
     static constexpr size_t FRAME_BYTES = FRAME_SAMPLES * 2; // s16le mono
+    static constexpr size_t MUSIC_BYTES = 3840;              // 20 ms @ 48 kHz s16 stereo
+    static constexpr size_t VOICE_RING_FRAMES = 12;          // 240 ms
+    static constexpr size_t MUSIC_RING_FRAMES = 100;         // 2 s capacity
+    static constexpr size_t MUSIC_RING_TRIM_FRAMES = 25;     // 500 ms flood trigger
+    static constexpr uint32_t MUSIC_IDLE_STOP_MS = 2000;     // flush-side liveness
+    static constexpr uint32_t VOICE_HOLD_LIVE_MS = 60;       // ~3 frame periods
+    static constexpr uint32_t MUSIC_HOLD_LIVE_MS = 100;      // ~5 frame periods
+    static constexpr uint32_t MIX_HOLD_MS = 40;
+    static constexpr uint32_t OUT_FRAME_MS = 20;
+    static constexpr float DUCK_STEP_DOWN = 0.25f; // ~80 ms full range
+    static constexpr float DUCK_STEP_UP = 0.007f;  // ~1 s full range
     static constexpr UBaseType_t TXQ_LEN = 16;
     static constexpr uint32_t SEND_TIMEOUT_MS = 2500;
 
@@ -95,6 +150,56 @@ namespace esphome
         -0.00446061f,
         0.00082065f,
         0.00000000f,
+    };
+
+    struct AudioRing
+    {
+      uint8_t *frames = nullptr;
+      uint16_t *lens = nullptr;
+      size_t capacity = 0;
+      volatile size_t count = 0;
+      size_t head = 0;
+
+      void alloc(size_t frameCount)
+      {
+        frames = (uint8_t *)heap_caps_calloc(frameCount, MUSIC_BYTES, MALLOC_CAP_SPIRAM);
+        lens = (uint16_t *)heap_caps_calloc(frameCount, sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        capacity = frameCount;
+      }
+
+      bool push(const uint8_t *data, size_t len, portMUX_TYPE *mtx)
+      {
+        portENTER_CRITICAL(mtx);
+        if (count == capacity || len > MUSIC_BYTES)
+        {
+          portEXIT_CRITICAL(mtx);
+          return false;
+        }
+        memcpy(frames + head * MUSIC_BYTES, data, len);
+        lens[head] = (uint16_t)len;
+        head = (head + 1) % capacity;
+        count++;
+        portEXIT_CRITICAL(mtx);
+        return true;
+      }
+
+      size_t pop(uint8_t *out, portMUX_TYPE *mtx)
+      {
+        portENTER_CRITICAL(mtx);
+        if (count == 0)
+        {
+          portEXIT_CRITICAL(mtx);
+          return 0;
+        }
+        size_t tail = (head + capacity - count) % capacity;
+        size_t len = lens[tail];
+        count--;
+        portEXIT_CRITICAL(mtx);
+        memcpy(out, frames + tail * MUSIC_BYTES, len);
+        return len;
+      }
+
+      void clear() { count = 0; }
     };
 
     class AtlasLink : public Component
@@ -116,13 +221,21 @@ namespace esphome
 
       void setup() override
       {
+        ESP_LOGI(TAG, "atlas_link v10: music-stream fade-in");
         // Secondary-mode speaker requires stream sample rate == configured bus rate;
         // nothing upstream sets this for us, so declare it before the first play().
         spk_->set_audio_stream_info(audio::AudioStreamInfo(16, 2, 48000));
+        spk_mtx_ = xSemaphoreCreateMutex();
+        vring_.alloc(VOICE_RING_FRAMES);
+        mring_.alloc(MUSIC_RING_FRAMES);
+        mixbuf_ = (uint8_t *)heap_caps_malloc(MUSIC_BYTES, MALLOC_CAP_SPIRAM);
+        voicebuf_ = (uint8_t *)heap_caps_malloc(MUSIC_BYTES, MALLOC_CAP_SPIRAM);
+        musicbuf_ = (uint8_t *)heap_caps_malloc(MUSIC_BYTES, MALLOC_CAP_SPIRAM);
         txq_ = xQueueCreate(TXQ_LEN, FRAME_BYTES);
         mic_->add_data_callback([this](const std::vector<uint8_t> &data)
                                 { this->on_mic_data_(data); });
         xTaskCreate(task_fn_, "atlas_link", 8192, this, 10, &task_);
+        xTaskCreate(out_task_fn_, "atlas_out", 6144, this, 10, &out_task_);
       }
 
       void loop() override
@@ -176,6 +289,7 @@ namespace esphome
 
     protected:
       static void task_fn_(void *arg) { static_cast<AtlasLink *>(arg)->run_(); }
+      static void out_task_fn_(void *arg) { static_cast<AtlasLink *>(arg)->out_run_(); }
 
       static uint32_t rgb_(uint8_t r, uint8_t g, uint8_t b)
       {
@@ -291,11 +405,17 @@ namespace esphome
             continue;
           }
           connected_ = true;
-          ESP_LOGI(TAG, "connected to %s:%u", host_.c_str(), port_);
+          ESP_LOGI(TAG, "connected to %s:%u (atlas_link v10)", host_.c_str(), (unsigned)port_);
           serve_();
           connected_ = false;
           tts_active_ = false;
-          spk_->stop();
+          vring_.clear();
+          mring_.clear();
+          last_music_rx_ = 0;
+          last_voice_rx_ = 0;
+          nextOutAt_ = 0;
+          music_was_live_ = false;
+          spk_stop_();
           close(sock_);
           sock_ = -1;
           led_state_changed_at_ = millis(); // disconnected breathe starts from off
@@ -380,18 +500,20 @@ namespace esphome
         uint32_t now = millis();
         if (now - statsStart_ < 2000)
           return;
-        if (debug_ && (rxTtsFrames_ > 0 || rxTtsDropped_ > 0 || micFrames_ > 0))
+        if (debug_ && (rxTtsFrames_ > 0 || rxTtsDropped_ > 0 || micFrames_ > 0 || musicFrames_ > 0 || musicDrop_ > 0))
         {
           ESP_LOGI(TAG,
-                   "stats: mic tx %lu, tts rx %lu (%lu B), dropped %lu, play blocked %lu ms (max %lu), partial %lu, playdrop %lu",
+                   "stats: mic tx %lu, tts rx %lu (%lu B), dropped %lu, playdrop %lu, "
+                   "music %lu (drop %lu, bad %lu, trim %lu)",
                    (unsigned long)micFrames_, (unsigned long)rxTtsFrames_, (unsigned long)rxTtsBytes_,
-                   (unsigned long)rxTtsDropped_, (unsigned long)playBlockedMs_,
-                   (unsigned long)playMaxBlockMs_, (unsigned long)playPartial_,
-                   (unsigned long)playDrop_);
+                   (unsigned long)rxTtsDropped_, (unsigned long)playDrop_,
+                   (unsigned long)musicFrames_, (unsigned long)musicDrop_,
+                   (unsigned long)musicBad_, (unsigned long)musicTrimDrop_);
         }
         statsStart_ = now;
         micFrames_ = rxTtsFrames_ = 0;
-        rxTtsBytes_ = rxTtsDropped_ = playBlockedMs_ = playMaxBlockMs_ = playPartial_ = playDrop_ = 0;
+        rxTtsBytes_ = rxTtsDropped_ = playDrop_ = 0;
+        musicFrames_ = musicDrop_ = musicBad_ = musicTrimDrop_ = 0;
       }
 
       bool send_frame_(uint8_t type, const uint8_t *payload, uint32_t len)
@@ -496,30 +618,33 @@ namespace esphome
           float env = frame_peak / 32768.0f;
           play_env_ = env > play_env_ * 0.85f ? env : play_env_ * 0.85f;
           size_t expected = outbuf_.size() * sizeof(int16_t);
-          const uint8_t *ptr = (const uint8_t *)out;
-          size_t written = 0;
-          uint32_t t0 = millis();
-          while (written < expected)
+          rxTtsFrames_++;
+          rxTtsBytes_ += len;
+          if (vring_.push((const uint8_t *)out, expected, &ring_mtx_))
           {
-            size_t w = spk_->play(ptr + written, expected - written);
-            if (w == 0)
-            {
-              if (millis() - t0 > 5)
-              {
-                // Ring full: we are ahead of playback. Drop the rest of this
-                // frame rather than stall the socket task.
-                playDrop_++;
-                break;
-              }
-              vTaskDelay(pdMS_TO_TICKS(1));
-              continue;
-            }
-            written += w;
+            last_voice_rx_ = millis();
+            out_notify_();
           }
-          uint32_t blocked = millis() - t0;
-          if (blocked > 50)
-            ESP_LOGW(TAG, "play blocked %lu ms", (unsigned long)blocked);
-          note_tts_frame_(len, written, expected, blocked);
+          else
+            playDrop_++;
+        }
+        else if (type == FRAME_MUSIC)
+        {
+          if (len != MUSIC_BYTES)
+          {
+            musicBad_++;
+            return;
+          }
+          if (mring_.push(payload, len, &ring_mtx_))
+          {
+            musicFrames_++;
+            last_music_rx_ = millis();
+            out_notify_();
+          }
+          else
+          {
+            musicDrop_++;
+          }
         }
         else if (type == FRAME_CTRL && len >= 1)
         {
@@ -528,9 +653,13 @@ namespace esphome
             tts_active_ = false;
             memset(fir_hist_, 0, sizeof(fir_hist_));
             play_env_ = 0;
-            spk_->stop();
+            vring_.clear();
+            // Instant voice silence, but never kill ducked music.
+            bool musicLive = mring_.count > 0 || millis() - last_music_rx_ < MUSIC_IDLE_STOP_MS;
+            if (!musicLive)
+              spk_stop_();
             if (debug_)
-              ESP_LOGI(TAG, "flush: speaker stopped");
+              ESP_LOGI(TAG, "flush: voice cleared");
             uint8_t ev = EV_FLUSHED;
             send_frame_(FRAME_EVENT, &ev, 1);
           }
@@ -569,18 +698,198 @@ namespace esphome
               }
             }
           }
+          else if (payload[0] == CTRL_MUSIC_STOP)
+          {
+            mring_.clear();
+            last_music_rx_ = 0;
+            music_was_live_ = false;
+            if (vring_.count == 0)
+              spk_stop_();
+            out_notify_();
+          }
+          else if (payload[0] == CTRL_MUSIC_DUCK && len >= 2)
+          {
+            duck_target_ = payload[1] / 255.0f;
+          }
         }
       }
 
-      void note_tts_frame_(uint32_t payload_len, size_t written, size_t expected, uint32_t blocked_ms)
+      void out_notify_()
       {
-        rxTtsFrames_++;
-        rxTtsBytes_ += payload_len;
-        playBlockedMs_ += blocked_ms;
-        if (blocked_ms > playMaxBlockMs_)
-          playMaxBlockMs_ = blocked_ms;
-        if (written != expected)
-          playPartial_++;
+        if (out_task_ != nullptr)
+          xTaskNotifyGive(out_task_);
+      }
+
+      // Asymmetric ramp: falling fast (barge-in wins in ~80 ms), rising slow
+      // (~1 s full range) so restores and fade-ins are gentle.
+      void duck_step_()
+      {
+        float d = duck_target_ - duck_prev_;
+        if (d > 0)
+        {
+          if (d > DUCK_STEP_UP)
+            d = DUCK_STEP_UP;
+        }
+        else
+        {
+          if (-d > DUCK_STEP_DOWN)
+            d = -DUCK_STEP_DOWN;
+        }
+        duck_next_ = duck_prev_ + d;
+      }
+
+      size_t spk_play_(const uint8_t *data, size_t len)
+      {
+        xSemaphoreTake(spk_mtx_, portMAX_DELAY);
+        size_t w = spk_->play(data, len);
+        xSemaphoreGive(spk_mtx_);
+        return w;
+      }
+
+      void spk_stop_()
+      {
+        xSemaphoreTake(spk_mtx_, portMAX_DELAY);
+        spk_->stop();
+        xSemaphoreGive(spk_mtx_);
+        playing_ = false;
+        nextOutAt_ = 0;
+      }
+
+      void out_run_()
+      {
+        for (;;)
+        {
+          ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+          for (;;)
+          {
+            // Hold briefly when a live stream's frame is momentarily late.
+            // Liveness here is tight (~3-5 frame periods): a long window
+            // holds across sentence gaps and after stream end, starving
+            // the speaker ring.
+            uint32_t holdStart = millis();
+            for (;;)
+            {
+              bool hvNow = vring_.count > 0;
+              bool hmNow = mring_.count > 0;
+              bool voiceWaiting =
+                  !hvNow && millis() - last_voice_rx_ < VOICE_HOLD_LIVE_MS;
+              bool musicWaiting =
+                  !hmNow && millis() - last_music_rx_ < MUSIC_HOLD_LIVE_MS;
+              bool needHold = (hvNow && musicWaiting) ||
+                              (hmNow && voiceWaiting) ||
+                              (voiceWaiting && musicWaiting);
+              if (!needHold || millis() - holdStart > MIX_HOLD_MS)
+                break;
+              vTaskDelay(pdMS_TO_TICKS(1));
+            }
+
+            bool hv = vring_.count > 0;
+            bool hm = mring_.count > 0;
+
+            if (!hv && !hm)
+            {
+              // Drained: wait for the next frame notification.
+              break;
+            }
+
+            // Output rate cap: at most one frame per OUT_FRAME_MS of wall
+            // clock while playing. No upstream flood can outrun the DAC;
+            // excess music accumulates in the ring and is trimmed below.
+            uint32_t nowMs = millis();
+            if (playing_ && nowMs < nextOutAt_)
+            {
+              vTaskDelay(pdMS_TO_TICKS(1));
+              continue;
+            }
+            nextOutAt_ = nowMs + OUT_FRAME_MS;
+
+            // Flood guard: pacing failure upstream delivers faster than real
+            // time. Trim contiguous whole frames — a clean forward skip
+            // instead of chipmunk chop. The threshold sits above the largest
+            // legitimate TCP burst and below sustained realtime.
+            while (mring_.count >= MUSIC_RING_TRIM_FRAMES)
+            {
+              if (mring_.pop(musicbuf_, &ring_mtx_) == 0)
+                break;
+              musicTrimDrop_++;
+            }
+
+            hv = vring_.count > 0;
+            hm = mring_.count > 0;
+
+            // Music fade-in: zero the gain on the absent -> live transition of
+            // the MUSIC stream. The speaker's playing flag is NOT usable here
+            // — it is sticky across cues and speech (the v9 bug: songs
+            // started loud because a tool cue had played first). Every track
+            // start, track change, and pause-resume has a stream gap and
+            // fades in; continuous playback does not.
+            bool musicLive =
+                hm || (millis() - last_music_rx_ < MUSIC_HOLD_LIVE_MS);
+            if (musicLive && !music_was_live_)
+            {
+              duck_prev_ = 0;
+            }
+            music_was_live_ = musicLive;
+
+            // Pop one frame from each non-empty ring. An undrained ring makes
+            // the count check above true forever and the task free-runs on
+            // stale buffer contents (the v3 bug).
+            size_t voiceLen = hv ? vring_.pop(voicebuf_, &ring_mtx_) : 0;
+            size_t musicLen = hm ? mring_.pop(musicbuf_, &ring_mtx_) : 0;
+            (void)musicLen;
+
+            duck_step_();
+            int16_t *v = (int16_t *)voicebuf_;
+            int16_t *m = (int16_t *)musicbuf_;
+            int16_t *o = (int16_t *)mixbuf_;
+            size_t voiceSamples = voiceLen / 2;
+            size_t total = MUSIC_BYTES / 2;
+            float delta = (duck_next_ - duck_prev_) / (float)total;
+            float gain = duck_prev_;
+            int32_t peak = 0;
+            for (size_t i = 0; i < total; i++)
+            {
+              int32_t voiceSample = 0;
+              if (i < voiceSamples)
+              {
+                voiceSample = v[i];
+                int32_t a = voiceSample < 0 ? -voiceSample : voiceSample;
+                if (a > peak)
+                  peak = a;
+              }
+              int32_t mixed = voiceSample + (hm ? (int32_t)lrintf(m[i] * gain) : 0);
+              o[i] = (int16_t)(mixed > 32767 ? 32767 : (mixed < -32768 ? -32768 : mixed));
+              gain += delta;
+            }
+            duck_prev_ = duck_next_;
+            if (voiceLen > 0)
+            {
+              float env = peak / 32768.0f;
+              play_env_ = env > play_env_ * 0.85f ? env : play_env_ * 0.85f;
+            }
+
+            size_t written = 0;
+            uint32_t t0 = millis();
+            while (written < MUSIC_BYTES)
+            {
+              size_t w = spk_play_(mixbuf_ + written, MUSIC_BYTES - written);
+              if (w == 0)
+              {
+                if (millis() - t0 > 5)
+                {
+                  // Ring full: we are ahead of playback. Drop the rest of
+                  // this frame rather than stall the output task.
+                  playDrop_++;
+                  break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(1));
+                continue;
+              }
+              written += w;
+            }
+            playing_ = true;
+          }
+        }
       }
 
       void on_mic_data_(const std::vector<uint8_t> &data)
@@ -615,14 +924,30 @@ namespace esphome
       int beam_offset_{0};
       int sock_{-1};
       TaskHandle_t task_{nullptr};
+      TaskHandle_t out_task_{nullptr};
       QueueHandle_t txq_{nullptr};
+      SemaphoreHandle_t spk_mtx_{nullptr};
+      portMUX_TYPE ring_mtx_ = portMUX_INITIALIZER_UNLOCKED;
+      AudioRing vring_;
+      AudioRing mring_;
+      uint8_t *mixbuf_{nullptr};
+      uint8_t *voicebuf_{nullptr};
+      uint8_t *musicbuf_{nullptr};
       volatile bool connected_{false};
       volatile uint32_t last_iter_{0};
       bool mic_running_{false};
       bool tts_active_{false};
       bool debug_{false};
+      bool playing_{false};
+      bool music_was_live_{false};
+      uint32_t nextOutAt_{0};
+      volatile float duck_target_{1.0f};
+      volatile float duck_prev_{1.0f};
+      volatile float duck_next_{1.0f};
+      volatile uint32_t last_music_rx_{0};
+      volatile uint32_t last_voice_rx_{0};
       uint8_t txacc_[FRAME_BYTES];
-      size_t txfill_{0};
+      size_t txfill_;
       int16_t fir_hist_[16] = {};
       std::vector<int16_t> outbuf_;
       float play_env_{0};
@@ -640,10 +965,11 @@ namespace esphome
       uint32_t rxTtsFrames_{0};
       uint32_t rxTtsBytes_{0};
       uint32_t rxTtsDropped_{0};
-      uint32_t playBlockedMs_{0};
-      uint32_t playMaxBlockMs_{0};
-      uint32_t playPartial_{0};
       uint32_t playDrop_{0};
+      uint32_t musicFrames_{0};
+      uint32_t musicDrop_{0};
+      uint32_t musicBad_{0};
+      uint32_t musicTrimDrop_{0};
       uint32_t statsStart_{0};
     };
 

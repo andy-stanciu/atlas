@@ -255,5 +255,98 @@
         }
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "music_play",
+      "description": "Play a song, album, or playlist on the speaker. Give query as the user described what they want to hear, e.g. an artist and song, an album name, or a playlist name. Returns what is now playing so you can confirm it aloud.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "What to play, e.g. 'Back in Black by AC/DC', 'the Dark Side of the Moon album', or 'my chill playlist'."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "music_pause",
+      "description": "Pause the music that is playing.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "music_resume",
+      "description": "Resume the music after it was paused.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "music_skip",
+      "description": "Skip to the next song.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "music_previous",
+      "description": "Go back to the previous song.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "music_volume",
+      "description": "Set the music volume.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "percent"
+        ],
+        "properties": {
+          "percent": {
+            "type": "integer",
+            "description": "Volume from 0 to 100."
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "music_status",
+      "description": "Report the song currently playing. Use when the user asks what song is playing.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
   }
 ]
