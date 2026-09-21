@@ -58,11 +58,9 @@ extension VoiceAssistant {
             shouldCancelTimeout = conversationActive
             return true
         }
-
         if shouldCancelTimeout {
             cancelConversationTimeout()
         }
-
         return didBegin
     }
 
@@ -104,7 +102,6 @@ extension VoiceAssistant {
                 shouldStartTimeout = conversationActive
             }
         }
-
         if shouldEndConversation {
             lifecycleQueue.async { [weak self] in
                 self?.endConversation()

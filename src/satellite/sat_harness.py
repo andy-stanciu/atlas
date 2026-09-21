@@ -6,7 +6,7 @@ import time
 import wave
 
 PORT = 8765
-MIC, TTS, CTRL, EV = 0x01, 0x02, 0x03, 0x04
+MIC, TTS, CTRL, EV, MUSIC = 0x01, 0x02, 0x03, 0x04, 0x05
 CTRL_FLUSH, CTRL_TTS_START = 0x01, 0x02
 
 session = None
@@ -54,6 +54,27 @@ class Session:
                 print(f"\n!! uplink silent for {quiet:.0f}s (device wedged?)")
             elif quiet <= 3:
                 warned = False
+
+    async def musicblast(self, seconds, pace=None):
+        frame = bytes(3840)
+        end = time.monotonic() + seconds
+        start = time.monotonic()
+        sent = 0
+        while time.monotonic() < end:
+            self.send(MUSIC, frame)
+            sent += 1
+            if pace is not None:
+                target = start + sent * pace / 1000.0
+                delay = target - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            if sent % 25 == 0:
+                await self.writer.drain()
+        await self.writer.drain()
+        elapsed = time.monotonic() - start
+        print(
+            f"music blasted {sent} frames in {elapsed:.1f}s ({sent / elapsed:.0f} fps)"
+        )
 
     async def _stream(self, frames):
         # Absolute-deadline pacing at 20 ms per frame
@@ -177,6 +198,14 @@ def repl(loop):
             session.play_fut = fut
         elif cmd == "blast" and arg and session:
             fut = asyncio.run_coroutine_threadsafe(session.blast(float(arg)), loop)
+            fut.add_done_callback(run_done)
+        elif cmd == "musicblast" and arg and session:
+            fut = asyncio.run_coroutine_threadsafe(session.musicblast(float(arg)), loop)
+            fut.add_done_callback(run_done)
+        elif cmd == "musicpace" and arg and session:
+            fut = asyncio.run_coroutine_threadsafe(
+                session.musicblast(float(arg), pace=20), loop
+            )
             fut.add_done_callback(run_done)
         elif cmd == "flush" and session:
             loop.call_soon_threadsafe(session.flush)

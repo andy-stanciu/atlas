@@ -27,11 +27,19 @@ final class VoiceAssistant {
     var satellite: SatelliteLink!
     var soundEffects: SoundEffects!
     var playback: AudioPlayback!
+    var musicStream: MusicStream!
     var notificationCoordinator: NotificationCoordinator?
 
     var state: AssistantState = .listening {
         didSet {
             updateLEDState()
+            updateMusicDuck()
+        }
+    }
+    var conversationActive = false {
+        didSet {
+            updateLEDState()
+            updateMusicDuck()
         }
     }
     var recording = Data()
@@ -50,11 +58,6 @@ final class VoiceAssistant {
     var micDebugMaxRMS: Float = 0
     var micDebugMaxPeak: Float = 0
 
-    var conversationActive = false {
-        didSet {
-            updateLEDState()
-        }
-    }
     var conversationTimeoutWorkItem: DispatchWorkItem?
     var shouldEndConversationAfterSpeech = false
 
@@ -97,6 +100,7 @@ final class VoiceAssistant {
             }
         )
         soundEffects = SoundEffects(satellite: satellite)
+        musicStream = MusicStream(satellite: satellite)
 
         playback = AudioPlayback(
             satellite: satellite,
@@ -147,6 +151,7 @@ final class VoiceAssistant {
         await sttHealthCheckTask.value
 
         try satellite.start()
+        musicStream.start()
         startNotificationCoordinator()
 
         Log.system(

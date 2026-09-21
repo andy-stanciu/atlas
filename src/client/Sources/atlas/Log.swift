@@ -99,6 +99,12 @@ enum Log {
         }
     }
 
+    static func music(_ message: String) {
+        if Config.printMusicDebug {
+            write("[music] \(message)", color: Palette.grey)
+        }
+    }
+
     static func system(_ message: String, terminator: String = "\n") {
         write(message, color: Palette.grey, terminator: terminator)
     }
