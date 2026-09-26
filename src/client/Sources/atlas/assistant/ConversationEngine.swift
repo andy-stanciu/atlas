@@ -195,7 +195,14 @@ final class ConversationEngine: @unchecked Sendable {
                     attemptedToolNames.append(call.function.name)
                     toolCalls.append(call)
 
-                    let result = try await toolServer.runTool(call)
+                    let result: String
+                    do {
+                        result = try await toolServer.runTool(call)
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        result = Self.toolFailureResult(call, error)
+                    }
                     try Task.checkCancellation()
                     toolResults.append(result)
                     Log.toolResult(call.function.name, result)
@@ -256,5 +263,24 @@ final class ConversationEngine: @unchecked Sendable {
             ToolSuccessResponse.self,
             from: Data(result.utf8)
         ))?.ok == true
+    }
+
+    private static func toolFailureResult(
+        _ call: ToolCall,
+        _ error: Error
+    ) -> String {
+        let payload: [String: Any] = [
+            "ok": false,
+            "error": "Tool '\(call.function.name)' failed: "
+                + "\(error.localizedDescription)",
+        ]
+        guard
+            let data = try? JSONSerialization.data(
+                withJSONObject: payload
+            )
+        else {
+            return #"{"ok":false,"error":"tool failed"}"#
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }

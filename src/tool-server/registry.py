@@ -29,11 +29,11 @@ class ToolRegistry:
                 arguments.get("room"), arguments.get("power")
             ),
             "schedule_reminder": lambda: self.service.schedule_reminder(arguments),
-            "list_reminders": lambda: self.service.list_reminders,
+            "list_reminders": self.service.list_reminders,
             "cancel_reminder": lambda: self.service.cancel_reminder(arguments),
             "address_reminder": lambda: self.service.address_reminder(arguments),
             "schedule_sequence": lambda: self.service.schedule_sequence(arguments),
-            "list_sequences": lambda: self.service.list_sequences,
+            "list_sequences": self.service.list_sequences,
             "cancel_sequence": lambda: self.service.cancel_sequence(arguments),
             "music_play": lambda: self.music.play(arguments.get("query")),
             "music_pause": self.music.pause,
