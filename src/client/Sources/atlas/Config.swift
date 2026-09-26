@@ -1,51 +1,28 @@
 import Foundation
 
 struct Config {
+    // Servers
     static let llmURL = URL(
         string: ProcessInfo.processInfo.environment["ATLAS_LLM_URL"]
             ?? "http://192.168.1.232:8000/v1"
     )!
-
     static let ttsServerHost =
         ProcessInfo.processInfo.environment["ATLAS_TTS_HOST"]
         ?? "192.168.1.232"
     static let ttsServerPort = 8767
-
     static let sttServerHost =
         ProcessInfo.processInfo.environment["ATLAS_STT_HOST"]
         ?? "192.168.1.232"
     static let sttServerPort = 8080
     static let sttServerAPIKey = "public_token"
-
-    static let toolServerURL = URL(
-        string: "http://127.0.0.1:8090"
-    )!
-
+    static let toolServerURL = URL(string: "http://127.0.0.1:8090")!
+    static let toolServerTimeout: TimeInterval = 5
     static let satellitePort = 8765
     static let satelliteDownlinkSampleRate: Double = 24_000
-
-    // Debug logging
-    static let debugAudioLevels = false
-    static let debugMicRecording = false
-    static let debugTurnRecording = false
-    static let debugDownlinkStats = false
-    static let printTimingDebug = true
-    static let printSpeakerDebug = false
-    static let printToolCallDebug = true
-    static let printEndpointDebug = true
-    static let printMusicDebug = true
-
-    static let debugMicRecordingPath = "/tmp/atlas-mic-debug.wav"
-    static let debugMicRecordingSeconds = 60
-    static let debugTurnRecordingPath: String = "/tmp"
-
-    static let toolServerTimeout: TimeInterval = 5
     static let speakerIdentificationTimeout: TimeInterval = 2
     static let speechPollIntervalSeconds: TimeInterval = 2
-    static let reminderRepeatIntervalSeconds: TimeInterval = 30
-    static let reminderMaxAnnouncements = 20
 
-    // LLM / tool config
+    // LLM / tool loop
     static let llmModel = "qwen3.8:27b"
     static let llmDefaultTemperature = 0.2
     static let llmConversationalTemperature = 0.9
@@ -58,14 +35,18 @@ struct Config {
     static let maxHistoryMessages = 24
     static let historyTrimTarget = 14
 
-    // Music config
+    // Reminders
+    static let reminderRepeatIntervalSeconds: TimeInterval = 30
+    static let reminderMaxAnnouncements = 20
+
+    // Music
     static let musicFIFOPath = "/tmp/atlas-music.fifo"
     static let musicSourceSampleRate: Double = 44_100
     static let musicDownlinkSampleRate: Double = 48_000
     static let musicMaxVolume: Float = 0.75
     static let musicDuckGain: Float = 0.15
 
-    // Audio interface settings
+    // Audio / VAD
     static let audioFrameMilliseconds: Double = 20
     static let speechThreshold: Float = 0.035
     static let speechPeakThreshold: Float = 0.08
@@ -78,13 +59,16 @@ struct Config {
     static let speculativePauseScoreThreshold: Double = 0.7
     static let speculativeEarlySilenceFrames = 15  // ~300ms at 20ms/frame
 
+    // Conversation timing
     static let conversationTimeoutSeconds: TimeInterval = 7.0
     static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
 
+    // Speaker identification
     static let speakerReinforceThreshold = 0.60
     static let speakerReinforceMinimumDurationSeconds = 3.0
     static let speakerEnrollmentMinimumClipSeconds = 3.0
 
+    // Spoken feedback
     static let thinkingFillers = [
         "One second, please.",
         "One moment, please.",
@@ -100,13 +84,13 @@ struct Config {
         "Just a moment, please.",
         "Give me a second.",
     ]
-
     static let sfxVolume: Float = 0.7
     static let speakingVolume: Float = 0.9
     static let toolCueFrequency1: Double = 880
     static let toolCueFrequency2: Double = 1_320
     static let toolCueDuration: TimeInterval = 0.14
 
+    // Persistent logging
     static let persistentLogMode = true
     static let logRootPath: String = {
         let raw =
@@ -114,4 +98,18 @@ struct Config {
             ?? "~/workplace/atlas/logs"
         return (raw as NSString).expandingTildeInPath
     }()
+
+    // Debug logging
+    static let debugAudioLevels = false
+    static let debugMicRecording = false
+    static let debugTurnRecording = false
+    static let debugDownlinkStats = false
+    static let printTimingDebug = true
+    static let printSpeakerDebug = false
+    static let printToolCallDebug = true
+    static let printEndpointDebug = true
+    static let printMusicDebug = true
+    static let debugMicRecordingPath = "/tmp/atlas-mic-debug.wav"
+    static let debugMicRecordingSeconds = 60
+    static let debugTurnRecordingPath: String = "/tmp"
 }
