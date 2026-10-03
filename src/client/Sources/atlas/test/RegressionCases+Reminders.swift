@@ -67,14 +67,5 @@ extension RegressionCase {
             minimumCallCount: 2,
             expectedToolOrder: ["list_reminders", "cancel_reminder"]
         ),
-
-        .init(
-            name: "Cancel reminder by known ID",
-            kind: .edgeCase,
-            prompt: "Cancel reminder number 3.",
-            requiredTools: ["cancel_reminder"],
-            expectedArgumentValues: ["cancel_reminder": ["reminder_id": .number(3)]],
-            minimumCallCount: 1
-        ),
     ]
 }

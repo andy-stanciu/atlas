@@ -1,14 +1,56 @@
+// src/client/Sources/atlas/test/RegressionRunner.swift
+
 import Foundation
+
+private final class RegressionOutput {
+    private var lines: [String] = []
+
+    func line(_ text: String) {
+        lines.append(text)
+        print(text)
+    }
+
+    func blank() {
+        line("")
+    }
+
+    @discardableResult
+    func save() -> URL? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
+        let directory = URL(fileURLWithPath: Config.logRootPath)
+            .appendingPathComponent("regression")
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            let url = directory.appendingPathComponent(
+                "regression-\(formatter.string(from: Date())).txt"
+            )
+            try lines.joined(separator: "\n")
+                .write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            print(
+                "[regression log] could not save output: "
+                    + error.localizedDescription
+            )
+            return nil
+        }
+    }
+}
 
 enum RegressionTests {
     static func run() async -> Int32 {
+        let out = RegressionOutput()
         let toolServer = RegressionToolServer(tools: RegressionTools.all)
         let engine = ConversationEngine(llm: LLMClient(), toolServer: toolServer)
         let cases = RegressionCase.all
-        var passed = 0
-        var failed = 0
+        var passedNames: [String] = []
+        var failedNames: [String] = []
 
-        print(
+        out.line(
             """
             Atlas regression suite
             Model: \(Config.llmModel)
@@ -19,10 +61,11 @@ enum RegressionTests {
         for testCase in cases {
             await toolServer.reset()
 
-            print("\n────────────────────────────────────────")
-            print("[test] \(testCase.name)")
-            print("[kind] \(testCase.kind.rawValue)")
-            print("[prompt] \(testCase.prompt)")
+            out.blank()
+            out.line("────────────────────────────────────────")
+            out.line("[test] \(testCase.name)")
+            out.line("[kind] \(testCase.kind.rawValue)")
+            out.line("[prompt] \(testCase.prompt)")
 
             do {
                 let result = try await engine.respond(
@@ -32,34 +75,56 @@ enum RegressionTests {
                 let calls = await toolServer.calls()
                 let failures = testCase.validate(result: result, calls: calls)
 
-                print("[calls] " + String(describing: calls.map(\.function.name)))
+                out.line("[calls] " + String(describing: calls.map(\.function.name)))
                 for call in calls {
-                    print("[arguments] \(call.function.name): " + renderJSON(call.function.arguments))
+                    out.line(
+                        "[arguments] \(call.function.name): "
+                            + renderJSON(call.function.arguments)
+                    )
                 }
-                print("[reply] \(result.reply)")
+                out.line("[reply] \(result.reply)")
 
                 if failures.isEmpty {
-                    passed += 1
-                    print("[result] PASS")
+                    passedNames.append(testCase.name)
+                    out.line("[result] PASS")
                 } else {
-                    failed += 1
-                    print("[result] FAIL")
+                    failedNames.append(testCase.name)
+                    out.line("[result] FAIL")
                     for failure in failures {
-                        print("  - \(failure)")
+                        out.line("  - \(failure)")
                     }
                 }
             } catch {
-                failed += 1
+                failedNames.append(testCase.name)
                 let calls = await toolServer.calls()
-                print("[calls before error] " + String(describing: calls.map(\.function.name)))
-                print("[result] ERROR: \(error.localizedDescription)")
+                out.line(
+                    "[calls before error] "
+                        + String(describing: calls.map(\.function.name))
+                )
+                out.line("[result] ERROR: \(error.localizedDescription)")
             }
         }
 
-        print("\n────────────────────────────────────────")
-        print("[summary] \(passed)/\(cases.count) passed, \(failed) failed")
+        out.blank()
+        out.line("────────────────────────────────────────")
+        out.line(
+            "[summary] \(passedNames.count)/\(cases.count) passed, "
+                + "\(failedNames.count) failed"
+        )
+        out.line("[passed] \(passedNames.count)")
+        for name in passedNames {
+            out.line("  \(name)")
+        }
+        out.line("[failed] \(failedNames.count)")
+        for name in failedNames {
+            out.line("  \(name)")
+        }
 
-        return failed == 0 ? 0 : 1
+        if let url = out.save() {
+            print("[regression log] saved to \(url.path)")
+        }
+
+        return failedNames.isEmpty ? 0 : 1
     }
 }
 

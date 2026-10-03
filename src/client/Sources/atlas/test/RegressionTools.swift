@@ -6,6 +6,7 @@ enum RegressionTools {
             name: "get_current_datetime",
             description: """
                 Get the current date, time, and day of week. Always call this
+                when the user asks for the time, date, or day of the week or
                 before scheduling anything.
                 """
         ),
@@ -155,7 +156,8 @@ enum RegressionTools {
             function: ToolFunctionDefinition(
                 name: name,
                 description: description,
-                parameters: ToolParameters(type: "object", required: required, properties: properties)
+                parameters: ToolParameters(
+                    type: "object", required: required, properties: properties)
             )
         )
     }
