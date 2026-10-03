@@ -8,21 +8,17 @@ namespace esphome
   {
 
     // Asymmetric ramp: falling fast (barge-in wins in ~80 ms), rising slow
-    // (~2.9 s full range) so restores and fade-ins are gentle.
+    // (~2.9 s full range) so restores and fade-ins are gentle. The low-pass
+    // cutoff moves the same fraction of its remaining (log) distance as the
+    // gain does, so both ramps start and finish together.
     void AtlasLink::duck_step_()
     {
-      float d = duck_target_ - duck_prev_;
-      if (d > 0)
-      {
-        if (d > DUCK_STEP_UP)
-          d = DUCK_STEP_UP;
-      }
-      else
-      {
-        if (-d > DUCK_STEP_DOWN)
-          d = -DUCK_STEP_DOWN;
-      }
+      float remain = duck_target_ - duck_prev_;
+      float d = remain > 0 ? fminf(remain, DUCK_STEP_UP) : fmaxf(remain, -DUCK_STEP_DOWN);
       duck_next_ = duck_prev_ + d;
+      float frac = fabsf(remain) > 1e-6f ? d / remain : 1.0f;
+      float target = lp_target_;
+      lp_next_ = frac >= 1.0f ? target : lp_prev_ * powf(target / lp_prev_, frac);
     }
 
     size_t AtlasLink::spk_play_(const uint8_t *data, size_t len)
@@ -128,6 +124,8 @@ namespace esphome
           (void)musicLen;
 
           duck_step_();
+          lp_.set_cutoff(lp_next_);
+          bool lpActive = lp_next_ < LOWPASS_OPEN_HZ;
           int16_t *v = (int16_t *)voicebuf_;
           int16_t *m = (int16_t *)musicbuf_;
           int16_t *o = (int16_t *)mixbuf_;
@@ -146,11 +144,18 @@ namespace esphome
               if (a > peak)
                 peak = a;
             }
-            int32_t mixed = voiceSample + (hm ? (int32_t)lrintf(m[i] * gain) : 0);
+            float ms = 0;
+            if (hm)
+            {
+              float f = lp_.process(m[i], i & 1);
+              ms = lpActive ? f : m[i];
+            }
+            int32_t mixed = voiceSample + (int32_t)lrintf(ms * gain);
             o[i] = (int16_t)(mixed > 32767 ? 32767 : (mixed < -32768 ? -32768 : mixed));
             gain += delta;
           }
           duck_prev_ = duck_next_;
+          lp_prev_ = lp_next_;
           if (voiceLen > 0)
           {
             float env = peak / 32768.0f;

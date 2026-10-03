@@ -1,6 +1,7 @@
 #include "atlas_link.h"
 
 #include <cstring>
+#include <math.h>
 
 #include <errno.h>
 #include <lwip/sockets.h>
@@ -156,6 +157,10 @@ namespace esphome
         out_notify_();
         break;
       case CTRL_MUSIC_DUCK:
+        // [cmd, gain u8, cutoff_hz u16 LE]; cutoff written first so a racing
+        // output frame never sees a new gain with a stale cutoff target.
+        if (len >= 4)
+          lp_target_ = fminf(fmaxf((float)(payload[2] | payload[3] << 8), LOWPASS_MIN_HZ), LOWPASS_OPEN_HZ);
         if (len >= 2)
           duck_target_ = payload[1] / 255.0f;
         break;

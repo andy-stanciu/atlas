@@ -7,7 +7,8 @@ extension VoiceAssistant {
                 || (conversationActive && state == .recording)
         }
         satellite.sendMusicDuck(
-            gain: ducked ? Config.musicDuckGain : Config.musicMaxVolume
+            gain: ducked ? Config.musicDuckGain : Config.musicMaxVolume,
+            cutoffHz: ducked ? Config.musicDuckLowPassHz : Config.musicOpenLowPassHz
         )
     }
 }

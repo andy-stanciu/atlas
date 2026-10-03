@@ -45,6 +45,8 @@ struct Config {
     static let musicDownlinkSampleRate: Double = 48_000
     static let musicMaxVolume: Float = 0.75
     static let musicDuckGain: Float = 0.15
+    static let musicDuckLowPassHz: Double = 1_500
+    static let musicOpenLowPassHz: Double = musicDownlinkSampleRate / 2
 
     // Audio / VAD
     static let audioFrameMilliseconds: Double = 20

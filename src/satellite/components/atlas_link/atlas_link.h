@@ -8,13 +8,15 @@
 // channel is extracted as s16le. Downlink voice: 24 kHz s16le mono on the
 // wire, upsampled 2x (half-band FIR) to the 48 kHz stereo stream the I2S bus
 // and the XVF3800 AEC reference require. Downlink music: 48 kHz s16le stereo.
-// Output mixing: out = voice + music * duck.
+// Output mixing: out = voice + lowpass(music) * duck. The low-pass cutoff
+// ramps in lockstep with the duck gain.
 //
 // Implementation files:
 //   atlas_link.cpp          lifecycle, connection, serve loop, stats
 //   atlas_link_protocol.cpp frame encode/parse, control handling
 //   atlas_link_audio.cpp    mic packing, TTS upsampling, music receive
 //   atlas_link_output.cpp   output task: hold, mix, pace, flood guard
+//   atlas_link_filter.h     music low-pass (cascaded biquads)
 //   atlas_link_led.cpp      LED ring rendering, beam capture
 
 #include <cstdint>
@@ -32,6 +34,8 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+
+#include "atlas_link_filter.h"
 
 namespace esphome
 {
@@ -52,6 +56,8 @@ namespace esphome
       FRAME_MUSIC = 0x05
     };
 
+    // CTRL_MUSIC_DUCK payload: [cmd, gain u8, cutoff_hz u16 LE]; the cutoff is
+    // optional (2-byte payloads leave it unchanged).
     enum ControlCmd : uint8_t
     {
       CTRL_FLUSH = 0x01,
@@ -217,6 +223,10 @@ namespace esphome
       volatile float duck_target_{1.0f};
       volatile float duck_prev_{1.0f};
       volatile float duck_next_{1.0f};
+      volatile float lp_target_{LOWPASS_OPEN_HZ};
+      float lp_prev_{LOWPASS_OPEN_HZ};
+      float lp_next_{LOWPASS_OPEN_HZ};
+      StereoLowPass lp_;
       volatile uint32_t last_music_rx_{0};
       volatile uint32_t last_voice_rx_{0};
       uint8_t txacc_[FRAME_BYTES]{};

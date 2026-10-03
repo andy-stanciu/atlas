@@ -209,10 +209,14 @@ final class SatelliteLink: @unchecked Sendable {
         }
     }
 
-    func sendMusicDuck(gain: Float) {
+    func sendMusicDuck(gain: Float, cutoffHz: Double = Config.musicOpenLowPassHz) {
         let scaled = UInt8(max(0, min(1, gain)) * 255)
+        let hz = UInt16(max(0, min(Double(UInt16.max), cutoffHz)))
         queue.async {
-            self.sendFrame(.control, Data([Control.musicDuck.rawValue, scaled]))
+            self.sendFrame(
+                .control,
+                Data([Control.musicDuck.rawValue, scaled, UInt8(hz & 0xff), UInt8(hz >> 8)])
+            )
         }
     }
 
