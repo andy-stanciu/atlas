@@ -103,6 +103,7 @@ final class SatelliteLink: @unchecked Sendable {
     private var debugMicTap: DebugMicTap?
     private var loggedFirstFrame = false
     private var lastLEDState: SatelliteLEDState = .idle
+    private var lastDuck: Data?
 
     // Downlink debugging (queue-confined)
     private var burstSentFrames = 0
@@ -212,11 +213,10 @@ final class SatelliteLink: @unchecked Sendable {
     func sendMusicDuck(gain: Float, cutoffHz: Double = Config.musicOpenLowPassHz) {
         let scaled = UInt8(max(0, min(1, gain)) * 255)
         let hz = UInt16(max(0, min(Double(UInt16.max), cutoffHz)))
+        let payload = Data([Control.musicDuck.rawValue, scaled, UInt8(hz & 0xff), UInt8(hz >> 8)])
         queue.async {
-            self.sendFrame(
-                .control,
-                Data([Control.musicDuck.rawValue, scaled, UInt8(hz & 0xff), UInt8(hz >> 8)])
-            )
+            self.lastDuck = payload
+            self.sendFrame(.control, payload)
         }
     }
 
@@ -287,6 +287,7 @@ final class SatelliteLink: @unchecked Sendable {
         rxBuffer = Data()
         Log.system("Satellite connected.")
         sendLEDState(lastLEDState)
+        if let lastDuck { sendFrame(.control, lastDuck) }
 
         let link: Link = (client, id)
         Thread.detachNewThread { [weak self] in

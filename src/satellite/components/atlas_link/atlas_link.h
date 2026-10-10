@@ -105,9 +105,9 @@ namespace esphome
     static constexpr uint32_t SEND_TIMEOUT_MS = 2500;
 
     // Asymmetric duck ramp: falling fast (barge-in wins in ~80 ms), rising
-    // slow (~2.9 s full range) so restores and music fade-ins are gentle.
+    // slow (~5s full range) so restores and music fade-ins are gentle.
     static constexpr float DUCK_STEP_DOWN = 0.25f;
-    static constexpr float DUCK_STEP_UP = 0.007f;
+    static constexpr float DUCK_STEP_UP = 0.0025f;
 
     static constexpr UBaseType_t TXQ_LEN = 16;
 

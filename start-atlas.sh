@@ -17,6 +17,7 @@ fi
 
 
 cmds=()
+cmds+=("cd $ROOT && go-librespot --config_dir src/tool-server/spotify")
 cmds+=("cd $ROOT/src/tool-server && uv run python app.py")
 cmds+=("cd $ROOT/src/client && swift build && ATLAS_LLM_URL=$LLM_BASE/v1 swift run atlas")
 
