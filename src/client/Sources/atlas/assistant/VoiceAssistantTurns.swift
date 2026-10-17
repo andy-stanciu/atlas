@@ -6,6 +6,8 @@ extension VoiceAssistant {
         pcm: Data,
         sampleRate: Double
     ) async {
+        let woke = takeWakeLatch()
+
         do {
             let wavURL = try writeTemporaryWAV(
                 pcm: pcm,
@@ -31,7 +33,7 @@ extension VoiceAssistant {
                 TranscriptCorrection.apply(try await client.finish())
             }
 
-            guard !transcript.isEmpty else {
+            guard !transcript.isEmpty || woke else {
                 Log.blank()
                 Log.system("No speech recognized.")
                 transitionToListening()
@@ -40,7 +42,8 @@ extension VoiceAssistant {
 
             try await processRecognizedTurn(
                 transcript: transcript,
-                wavURL: wavURL
+                wavURL: wavURL,
+                woke: woke
             )
         } catch {
             let nsError = error as NSError
@@ -63,7 +66,8 @@ extension VoiceAssistant {
 
     func processRecognizedTurn(
         transcript: String,
-        wavURL: URL
+        wavURL: URL,
+        woke: Bool = false
     ) async throws {
         Log.transcript("You: \(transcript)")
 
@@ -82,25 +86,18 @@ extension VoiceAssistant {
         }
 
         let startedNewConversation = !active
-        let wakeRemainder = textAfterWakeGreeting(transcript)
-        let wakeOnly =
-            startedNewConversation
-            && isWakeGreeting(transcript)
-            && normalizedText(wakeRemainder).isEmpty
+        var wakeOnly = false
 
         if !active {
-            guard isWakeGreeting(transcript) else {
+            guard woke || isWakeGreeting(transcript) else {
                 transitionToListening()
                 return
             }
 
             beginConversation()
 
-            userText = wakeRemainder
-
-            if normalizedText(userText).isEmpty {
-                userText = "Hello"
-            }
+            userText = firstTurnText(transcript)
+            wakeOnly = userText == Config.wakeGreeting
         } else {
             cancelConversationTimeout()
         }

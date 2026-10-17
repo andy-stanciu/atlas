@@ -4,7 +4,7 @@ extension VoiceAssistant {
     func updateMusicDuck() {
         let ducked = lock.withLock {
             state == .speaking
-                || (conversationActive && state == .recording)
+                || (state == .recording && (conversationActive || wakeLatched))
         }
         satellite.sendMusicDuck(
             gain: ducked ? Config.musicDuckGain : Config.musicMaxVolume,

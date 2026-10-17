@@ -22,11 +22,14 @@ extension VoiceAssistant {
         let rate = Int(recordingSampleRate.rounded())
         feedRecognizer { client in
             try? await client.begin()
-            try? await client.appendPCM16(preRoll, sourceSampleRate: rate)
+            if !preRoll.isEmpty {
+                try? await client.appendPCM16(preRoll, sourceSampleRate: rate)
+            }
         }
     }
 
     func cancelRecognizerSession() {
+        clearWakeLatch()
         feedRecognizer { client in
             try? await client.cancel()
         }

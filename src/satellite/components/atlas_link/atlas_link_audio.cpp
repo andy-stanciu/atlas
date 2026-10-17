@@ -37,9 +37,12 @@ namespace esphome
         n -= 8;
         if (txfill_ == FRAME_BYTES)
         {
-          if (xQueueSend(txq_, txacc_, 0) != pdTRUE)
-            txdrop_++;
+          uint32_t wr = mic_wr_.load(std::memory_order_relaxed);
+          memcpy(micring_ + (wr % MIC_RING_FRAMES) * FRAME_BYTES, txacc_, FRAME_BYTES);
+          mic_wr_.store(wr + 1, std::memory_order_release);
           txfill_ = 0;
+          if (streaming_ && task_ != nullptr)
+            xTaskNotifyGive(task_);
         }
       }
     }
@@ -106,10 +109,26 @@ namespace esphome
         musicBad_++;
         return;
       }
+      uint32_t now = millis();
+      uint32_t prev = last_music_rx_;
+      if (prev != 0)
+      {
+        uint32_t gap = now - prev;
+        if (gap < MUSIC_IDLE_STOP_MS)
+        {
+          if (gap > diagMusicGapMax_)
+            diagMusicGapMax_ = gap;
+          if (log_stalls_ && gap > DIAG_MUSIC_GAP_WARN_MS && now - last_music_gap_log_ > DIAG_WARN_INTERVAL_MS)
+          {
+            last_music_gap_log_ = now;
+            ESP_LOGW(TAG, "music rx gap %lu ms (ring %lu)", (unsigned long)gap, (unsigned long)mring_.count);
+          }
+        }
+      }
       if (mring_.push(payload, len, &ring_mtx_))
       {
         musicFrames_++;
-        last_music_rx_ = millis();
+        last_music_rx_ = now;
         out_notify_();
       }
       else

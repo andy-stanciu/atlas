@@ -34,12 +34,14 @@ final class VoiceAssistant {
         didSet {
             updateLEDState()
             updateMusicDuck()
+            updateSatelliteListening()
         }
     }
     var conversationActive = false {
         didSet {
             updateLEDState()
             updateMusicDuck()
+            updateSatelliteListening()
         }
     }
     var recording = Data()
@@ -52,6 +54,8 @@ final class VoiceAssistant {
     var silenceFrames = 0
     var queuedAudioBuffers = 0
     var speakingStartedAt: CFTimeInterval = 0
+
+    var wakeLatched = false
 
     // Debug metering; only touched on the satellite audio queue
     var micDebugFrames = 0
@@ -99,6 +103,9 @@ final class VoiceAssistant {
                 self?.handleSatelliteDisconnect()
             }
         )
+        satellite.onWake = { [weak self] in
+            self?.armWake()
+        }
         soundEffects = SoundEffects(satellite: satellite)
         musicStream = MusicStream(satellite: satellite)
 

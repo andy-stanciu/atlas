@@ -2,6 +2,8 @@
 
 #include <math.h>
 
+#include "esphome/core/log.h"
+
 namespace esphome
 {
   namespace atlas_link
@@ -103,6 +105,33 @@ namespace esphome
           hv = vring_.count > 0;
           hm = mring_.count > 0;
 
+          uint32_t depth = mring_.count;
+          if (depth < diagRingMin_)
+            diagRingMin_ = depth;
+          if (depth > diagRingMax_)
+            diagRingMax_ = depth;
+
+          if (hm)
+          {
+            if (diagLastMusicOut_ != 0)
+            {
+              uint32_t g = nowMs - diagLastMusicOut_;
+              if (g > DIAG_OUT_GAP_MS && g < MUSIC_IDLE_STOP_MS)
+              {
+                diagOutGaps_++;
+                if (g > diagOutGapMax_)
+                  diagOutGapMax_ = g;
+                if (log_stalls_ && g > DIAG_OUT_GAP_WARN_MS && nowMs - last_out_gap_log_ > DIAG_WARN_INTERVAL_MS)
+                {
+                  last_out_gap_log_ = nowMs;
+                  ESP_LOGW(TAG, "music output gap %lu ms (ring %lu, voice %lu)",
+                           (unsigned long)g, (unsigned long)depth, (unsigned long)vring_.count);
+                }
+              }
+            }
+            diagLastMusicOut_ = nowMs;
+          }
+
           // Music fade-in: zero the gain on the absent -> live transition of
           // the MUSIC stream (not the speaker's playing flag, which is
           // sticky across cues and speech). Every track start, track
@@ -163,16 +192,18 @@ namespace esphome
           }
 
           size_t written = 0;
+          bool starting = !playing_;
+          bool full = false;
+          uint32_t budgetMs = starting ? SPK_START_WAIT_MS : SPK_WRITE_WAIT_MS;
           uint32_t t0 = millis();
           while (written < MUSIC_BYTES)
           {
             size_t w = spk_play_(mixbuf_ + written, MUSIC_BYTES - written);
             if (w == 0)
             {
-              if (millis() - t0 > 5)
+              full = !starting;
+              if (millis() - t0 > budgetMs)
               {
-                // Speaker ring full: we are ahead of playback. Drop the
-                // rest of this frame rather than stall the output task.
                 playDrop_++;
                 break;
               }
@@ -181,7 +212,13 @@ namespace esphome
             }
             written += w;
           }
-          playing_ = true;
+          uint32_t wd = millis() - t0;
+          if (wd > diagSpkWriteMax_)
+            diagSpkWriteMax_ = wd;
+          if (full)
+            diagSpkFull_++;
+          if (written > 0)
+            playing_ = true;
         }
       }
     }

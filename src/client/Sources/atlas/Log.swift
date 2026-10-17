@@ -18,6 +18,7 @@ enum Log {
         static let green = "\u{001B}[38;5;108m"
         static let red = "\u{001B}[38;5;174m"
         static let cyan = "\u{001B}[38;5;80m"
+        static let yellow = "\u{001B}[38;5;179m"
         static let reset = "\u{001B}[0m"
     }
 
@@ -102,6 +103,24 @@ enum Log {
     static func music(_ message: String) {
         if Config.printMusicDebug {
             write("[music] \(message)", color: Palette.grey)
+        }
+    }
+
+    static func link(_ message: String) {
+        if Config.printLinkDebug {
+            write("[link] \(message)", color: Palette.yellow)
+        }
+    }
+
+    static func linkStall(_ message: String) {
+        if Config.printLinkStalls {
+            write("[link] \(message)", color: Palette.yellow)
+        }
+    }
+
+    static func connection(_ message: String) {
+        if Config.printConnectionDebug {
+            write(message, color: Palette.grey)
         }
     }
 

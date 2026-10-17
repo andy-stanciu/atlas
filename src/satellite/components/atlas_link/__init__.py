@@ -7,6 +7,9 @@ CONF_HOST = "host"
 CONF_MIC = "microphone_id"
 CONF_SPK = "speaker_id"
 CONF_DEBUG = "debug"
+CONF_LOG_STATS = "log_stats"
+CONF_LOG_STALLS = "log_stalls"
+CONF_LOG_EVENTS = "log_events"
 CONF_RESPAKER_ID = "respeaker_id"
 CONF_MUTE_SWITCH_ID = "mute_switch_id"
 CONF_BEAM_OFFSET = "beam_offset"
@@ -27,6 +30,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MUTE_SWITCH_ID): cv.use_id(switch.Switch),
         cv.Optional(CONF_BEAM_OFFSET, default=0): cv.int_range(min=-12, max=12),
         cv.Optional(CONF_DEBUG, default=False): cv.boolean,
+        cv.Optional(CONF_LOG_STATS): cv.boolean,
+        cv.Optional(CONF_LOG_STALLS): cv.boolean,
+        cv.Optional(CONF_LOG_EVENTS): cv.boolean,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -34,10 +40,14 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
+    debug = config[CONF_DEBUG]
     cg.add(var.set_server(config[CONF_HOST], config[CONF_PORT]))
     cg.add(var.set_microphone(await cg.get_variable(config[CONF_MIC])))
     cg.add(var.set_speaker(await cg.get_variable(config[CONF_SPK])))
-    cg.add(var.set_debug(config[CONF_DEBUG]))
+    cg.add(var.set_debug(debug))
+    cg.add(var.set_log_stats(config.get(CONF_LOG_STATS, debug)))
+    cg.add(var.set_log_stalls(config.get(CONF_LOG_STALLS, debug)))
+    cg.add(var.set_log_events(config.get(CONF_LOG_EVENTS, debug)))
     cg.add(var.set_beam_offset(config[CONF_BEAM_OFFSET]))
     if CONF_RESPAKER_ID in config:
         cg.add(var.set_respeaker(await cg.get_variable(config[CONF_RESPAKER_ID])))

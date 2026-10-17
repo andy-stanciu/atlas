@@ -46,6 +46,7 @@ namespace esphome
             vTaskDelay(pdMS_TO_TICKS(2));
             continue;
           }
+          ESP_LOGW(TAG, "send error %d", errno);
           return false;
         }
         off += w;
@@ -63,7 +64,7 @@ namespace esphome
         uint32_t len;
         memcpy(&len, buf.data() + pos, 4);
         uint8_t type = buf[pos + 4];
-        if (len > 65536)
+        if (len > MAX_RX_FRAME_BYTES)
         {
           pos++; // resync on garbage length
           continue;
@@ -111,8 +112,6 @@ namespace esphome
         bool musicLive = mring_.count > 0 || millis() - last_music_rx_ < MUSIC_IDLE_STOP_MS;
         if (!musicLive)
           spk_stop_();
-        if (debug_)
-          ESP_LOGI(TAG, "flush: voice cleared");
         uint8_t ev = EV_FLUSHED;
         send_frame_(FRAME_EVENT, &ev, 1);
         break;
@@ -121,8 +120,6 @@ namespace esphome
         tts_active_ = true;
         memset(fir_hist_, 0, sizeof(fir_hist_));
         play_env_ = 0;
-        if (debug_)
-          ESP_LOGI(TAG, "tts start");
         break;
       case CTRL_SET_STATE:
         if (len < 2)
@@ -140,17 +137,11 @@ namespace esphome
         {
           spinner_origin_ = frozen_beam_dir_ >= 0 ? frozen_beam_dir_ : 0;
         }
-        if (debug_)
-        {
-          if (led_state_ == LED_PROCESSING)
-            ESP_LOGI(TAG, "led state %d (spinner origin %d)", (int)led_state_, spinner_origin_);
-          else
-            ESP_LOGI(TAG, "led state %d", (int)led_state_);
-        }
         break;
       case CTRL_MUSIC_STOP:
         mring_.clear(&ring_mtx_);
         last_music_rx_ = 0;
+        diagLastMusicOut_ = 0;
         music_was_live_ = false;
         if (vring_.count == 0)
           spk_stop_();
@@ -163,6 +154,14 @@ namespace esphome
           lp_target_ = fminf(fmaxf((float)(payload[2] | payload[3] << 8), LOWPASS_MIN_HZ), LOWPASS_OPEN_HZ);
         if (len >= 2)
           duck_target_ = payload[1] / 255.0f;
+        break;
+      case CTRL_LISTEN:
+        if (len < 2)
+          break;
+        if (payload[1])
+          hold_stream_();
+        else
+          close_stream_();
         break;
       default:
         break;

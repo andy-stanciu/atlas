@@ -59,6 +59,14 @@ final class SatelliteLink: @unchecked Sendable {
         case control = 0x03
         case event = 0x04
         case music = 0x05
+
+        var kind: LinkKind {
+            switch self {
+            case .music: return .music
+            case .tts: return .tts
+            default: return .other
+            }
+        }
     }
 
     private enum Control: UInt8 {
@@ -67,6 +75,12 @@ final class SatelliteLink: @unchecked Sendable {
         case setState = 0x03
         case musicStop = 0x04
         case musicDuck = 0x05
+        case listen = 0x06
+    }
+
+    private enum Event: UInt8 {
+        case flushed = 0x01
+        case wake = 0x02
     }
 
     private struct Burst {
@@ -74,11 +88,17 @@ final class SatelliteLink: @unchecked Sendable {
         let completion: (Bool) -> Void
     }
 
+    private struct MusicFrame {
+        let pcm: Data
+        let enqueuedAt: UInt64
+    }
+
     private typealias Link = (fd: Int32, id: UInt64)
 
     private let port: UInt16
     private let onAudio: (UnsafePointer<Float>, Int) -> Void
     private let onDisconnect: () -> Void
+    var onWake: (() -> Void)?
 
     private let queue = DispatchQueue(
         label: "atlas.satellite",
@@ -100,10 +120,16 @@ final class SatelliteLink: @unchecked Sendable {
     private var generation = 0
     private var senderActive = false
 
+    private let musicLock = NSLock()
+    private var musicBacklog: [MusicFrame] = []
+    private var musicDrainScheduled = false
+
     private var debugMicTap: DebugMicTap?
-    private var loggedFirstFrame = false
     private var lastLEDState: SatelliteLEDState = .idle
+    private var lastListening = false
     private var lastDuck: Data?
+
+    private let stats = LinkStats()
 
     // Downlink debugging (queue-confined)
     private var burstSentFrames = 0
@@ -168,6 +194,18 @@ final class SatelliteLink: @unchecked Sendable {
         }
         acceptThread.name = "atlas.satellite.accept"
         acceptThread.start()
+
+        scheduleStats()
+    }
+
+    private func scheduleStats() {
+        queue.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self else {
+                return
+            }
+            self.stats.emit(fd: self.currentLink().fd)
+            self.scheduleStats()
+        }
     }
 
     // MARK: - Public send surface
@@ -175,7 +213,7 @@ final class SatelliteLink: @unchecked Sendable {
     func enqueue(pcm: Data, completion: @escaping (Bool) -> Void) {
         queue.async {
             guard self.currentLink().fd >= 0 else {
-                Log.system("Satellite not connected; dropping audio.")
+                Log.connection("Satellite not connected; dropping audio.")
                 completion(false)
                 return
             }
@@ -204,9 +242,38 @@ final class SatelliteLink: @unchecked Sendable {
         }
     }
 
-    func sendMusicFrame(_ pcm: Data) {
+    func setListening(_ on: Bool) {
         queue.async {
-            self.sendFrame(.music, pcm)
+            guard on != self.lastListening else {
+                return
+            }
+            self.lastListening = on
+            self.sendListening(on)
+        }
+    }
+
+    func resync() {
+        queue.async {
+            self.sendLEDState(self.lastLEDState)
+            self.sendListening(self.lastListening)
+        }
+    }
+
+    func sendMusicFrame(_ pcm: Data) {
+        musicLock.lock()
+        musicBacklog.append(MusicFrame(pcm: pcm, enqueuedAt: LinkStats.nowNs()))
+        var dropped = 0
+        while musicBacklog.count > Config.musicBacklogFrames {
+            musicBacklog.removeFirst()
+            dropped += 1
+        }
+        stats.musicBacklog(musicBacklog.count, dropped: dropped)
+        let schedule = !musicDrainScheduled
+        musicDrainScheduled = true
+        musicLock.unlock()
+
+        if schedule {
+            queue.async { self.drainMusic() }
         }
     }
 
@@ -221,8 +288,46 @@ final class SatelliteLink: @unchecked Sendable {
     }
 
     func stopMusic() {
+        clearMusicBacklog()
         queue.async {
             self.sendControl(.musicStop)
+        }
+    }
+
+    // MARK: - Music backlog
+
+    private func clearMusicBacklog() {
+        musicLock.lock()
+        musicBacklog.removeAll()
+        musicLock.unlock()
+    }
+
+    private func drainMusic() {
+        musicLock.lock()
+        guard !musicBacklog.isEmpty else {
+            musicDrainScheduled = false
+            musicLock.unlock()
+            return
+        }
+        let frame = musicBacklog.removeFirst()
+        musicLock.unlock()
+
+        let lag = LinkStats.msSince(frame.enqueuedAt)
+        stats.musicLag(lag)
+        if lag > Config.linkStallMs {
+            stats.stall("music queue lag \(Int(lag))ms", fd: currentLink().fd)
+        }
+        sendFrame(.music, frame.pcm)
+
+        musicLock.lock()
+        let more = !musicBacklog.isEmpty
+        if !more {
+            musicDrainScheduled = false
+        }
+        musicLock.unlock()
+
+        if more {
+            queue.async { self.drainMusic() }
         }
     }
 
@@ -285,8 +390,10 @@ final class SatelliteLink: @unchecked Sendable {
         stateLock.unlock()
 
         rxBuffer = Data()
-        Log.system("Satellite connected.")
+        clearMusicBacklog()
+        Log.connection("Satellite connected.")
         sendLEDState(lastLEDState)
+        sendListening(lastListening)
         if let lastDuck { sendFrame(.control, lastDuck) }
 
         let link: Link = (client, id)
@@ -298,6 +405,7 @@ final class SatelliteLink: @unchecked Sendable {
     private func readLoop(_ link: Link) {
         var buffer = [UInt8](repeating: 0, count: 65_536)
         var pfd = pollfd(fd: link.fd, events: Int16(POLLIN), revents: 0)
+        var reason = "unknown"
 
         while true {
             let ready = poll(&pfd, 1, 250)
@@ -305,26 +413,31 @@ final class SatelliteLink: @unchecked Sendable {
                 if errno == EINTR {
                     continue
                 }
+                reason = "poll error \(errno)"
                 break
             }
             if ready == 0 {
                 if currentLink().id != link.id {
+                    reason = "superseded"
                     break
                 }
                 continue
             }
             if pfd.revents & Int16(POLLNVAL) != 0 || pfd.revents & Int16(POLLERR) != 0 {
+                reason = "socket error (revents \(pfd.revents))"
                 break
             }
 
             let n = read(link.fd, &buffer, buffer.count)
             if n == 0 {
+                reason = "peer closed (read 0)"
                 break
             }
             if n < 0 {
                 if errno == EINTR || errno == EAGAIN {
                     continue
                 }
+                reason = "read error \(errno)"
                 break
             }
 
@@ -335,11 +448,11 @@ final class SatelliteLink: @unchecked Sendable {
         }
 
         queue.async { [weak self] in
-            self?.readerExited(link)
+            self?.readerExited(link, reason: reason)
         }
     }
 
-    private func readerExited(_ link: Link) {
+    private func readerExited(_ link: Link, reason: String) {
         guard currentLink().id == link.id else {
             return
         }
@@ -351,7 +464,8 @@ final class SatelliteLink: @unchecked Sendable {
         stateLock.unlock()
 
         dropPending()
-        Log.system("Satellite disconnected.")
+        clearMusicBacklog()
+        Log.connection("Satellite disconnected: \(reason).")
         onDisconnect()
     }
 
@@ -361,8 +475,10 @@ final class SatelliteLink: @unchecked Sendable {
         guard currentLink().id == linkID else {
             return
         }
+        let started = LinkStats.nowNs()
         rxBuffer.append(data)
         parseFrames()
+        stats.ingest(bytes: data.count, ms: LinkStats.msSince(started))
     }
 
     private func parseFrames() {
@@ -390,6 +506,12 @@ final class SatelliteLink: @unchecked Sendable {
     }
 
     private func handleFrame(type: UInt8, payload: Data) {
+        if type == FrameType.event.rawValue {
+            if payload.first == Event.wake.rawValue {
+                onWake?()
+            }
+            return
+        }
         guard type == FrameType.mic.rawValue else {
             return
         }
@@ -398,10 +520,6 @@ final class SatelliteLink: @unchecked Sendable {
             return
         }
 
-        if !loggedFirstFrame {
-            loggedFirstFrame = true
-            Log.system("Mic streaming audio frames...")
-        }
         debugMicTap?.append(payload)
 
         var floats = [Float](repeating: 0, count: count)
@@ -439,6 +557,10 @@ final class SatelliteLink: @unchecked Sendable {
         sendFrame(.control, Data([Control.setState.rawValue, state.rawValue]))
     }
 
+    private func sendListening(_ on: Bool) {
+        sendFrame(.control, Data([Control.listen.rawValue, on ? 1 : 0]))
+    }
+
     private func sendControl(_ control: Control) {
         sendFrame(.control, Data([control.rawValue]))
     }
@@ -458,12 +580,33 @@ final class SatelliteLink: @unchecked Sendable {
         frame.append(type.rawValue)
         frame.append(payload)
 
-        if !writeAll(link, frame) {
-            handleWriteFailure(link)
+        var io = WriteIO()
+        let started = LinkStats.nowNs()
+        let ok = writeAll(link, frame, droppable: type == .music, io: &io)
+        let ms = LinkStats.msSince(started)
+
+        if io.dropped {
+            stats.musicWriteDropped()
+        } else {
+            stats.write(type.kind, ms: ms, io: io, sndq: LinkStats.sndq(link.fd))
+        }
+
+        if !ok {
+            let reason =
+                "\(type) frame, \(Int(ms))ms, errno \(io.err), "
+                + stats.snapshot(link.fd)
+            handleWriteFailure(link, reason: reason)
+        } else if ms > Config.linkStallMs {
+            stats.stall("\(type) write took \(Int(ms))ms", fd: link.fd)
         }
     }
 
-    private func writeAll(_ link: Link, _ frame: Data) -> Bool {
+    private func writeAll(
+        _ link: Link,
+        _ frame: Data,
+        droppable: Bool,
+        io: inout WriteIO
+    ) -> Bool {
         frame.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else {
                 return false
@@ -479,19 +622,29 @@ final class SatelliteLink: @unchecked Sendable {
                     continue
                 }
                 if errno == EAGAIN {
+                    if offset == 0, droppable {
+                        io.dropped = true
+                        return true
+                    }
                     var pfd = pollfd(fd: link.fd, events: Int16(POLLOUT), revents: 0)
-                    if poll(&pfd, 1, 100) <= 0 {
+                    let waitStart = LinkStats.nowNs()
+                    let ready = poll(&pfd, 1, Config.linkWritePatienceMs)
+                    io.waits += 1
+                    io.waitedMs += LinkStats.msSince(waitStart)
+                    if ready <= 0 {
+                        io.err = ready == 0 ? ETIMEDOUT : errno
                         return false
                     }
                     continue
                 }
+                io.err = errno
                 return false
             }
             return true
         }
     }
 
-    private func handleWriteFailure(_ link: Link) {
+    private func handleWriteFailure(_ link: Link, reason: String) {
         guard currentLink().id == link.id else {
             return
         }
@@ -503,7 +656,8 @@ final class SatelliteLink: @unchecked Sendable {
         stateLock.unlock()
 
         dropPending()
-        Log.system("Satellite write failed; connection dropped.")
+        clearMusicBacklog()
+        Log.connection("Satellite write failed: \(reason).")
         onDisconnect()
     }
 

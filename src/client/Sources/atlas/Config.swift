@@ -22,6 +22,10 @@ struct Config {
     static let speakerIdentificationTimeout: TimeInterval = 2
     static let speechPollIntervalSeconds: TimeInterval = 2
 
+    // Satellite link
+    static let musicBacklogFrames = 10  // 200 ms at 20 ms/frame; older music is dropped
+    static let linkWritePatienceMs: Int32 = 2_000
+
     // LLM / tool loop
     static let llmModel = "qwen3.8:27b"
     static let llmDefaultTemperature = 0.2
@@ -65,6 +69,10 @@ struct Config {
     static let conversationTimeoutSeconds: TimeInterval = 7.0
     static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
 
+    // Wake word
+    static let wakeGreeting = "Hey Atlas"
+    static let wakeWords: Set<String> = ["atlas", "alice", "jarvis"]  // temporary jarvis model
+
     // Speaker identification
     static let speakerReinforceThreshold = 0.60
     static let speakerReinforceMinimumDurationSeconds = 3.0
@@ -106,11 +114,15 @@ struct Config {
     static let debugMicRecording = false
     static let debugTurnRecording = false
     static let debugDownlinkStats = false
-    static let printTimingDebug = true
+    static let printTimingDebug = false
     static let printSpeakerDebug = false
-    static let printToolCallDebug = true
-    static let printEndpointDebug = true
-    static let printMusicDebug = true
+    static let printToolCallDebug = false
+    static let printEndpointDebug = false
+    static let printMusicDebug = false
+    static let printLinkDebug = true
+    static let printLinkStalls = true
+    static let printConnectionDebug = true
+    static let linkStallMs: Double = 60
     static let debugMicRecordingPath = "/tmp/atlas-mic-debug.wav"
     static let debugMicRecordingSeconds = 60
     static let debugTurnRecordingPath: String = "/tmp"
