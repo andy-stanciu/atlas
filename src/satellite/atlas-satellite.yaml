@@ -148,7 +148,7 @@ micro_wake_word:
   stop_after_detection: false
   task_stack_in_psram: true
   models:
-    - model: hey_jarvis
+    - model: wakeword/hey_atlas.json
   on_wake_word_detected:
     - lambda: id(sat_link)->on_wake();
 

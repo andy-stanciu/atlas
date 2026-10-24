@@ -71,7 +71,7 @@ struct Config {
 
     // Wake word
     static let wakeGreeting = "Hey Atlas"
-    static let wakeWords: Set<String> = ["atlas", "alice", "jarvis"]  // temporary jarvis model
+    static let wakeWords: Set<String> = ["atlas", "alice"]
 
     // Speaker identification
     static let speakerReinforceThreshold = 0.60

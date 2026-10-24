@@ -1,0 +1,146 @@
+wake_word:
+  name: hey_atlas
+  display: "HEY ATLAS"
+  author: andy
+
+paths:
+  data: data
+  work: work
+  models: models
+
+datasets:
+  audioset_clips: 18683
+
+generate:
+  voice_model: data/voices/en_US-libritts_r-medium.pt
+  voice_url: https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt
+  voice_config_url: https://raw.githubusercontent.com/rhasspy/piper-sample-generator/master/models/en_US-libritts_r-medium.pt.json
+  batch_size: 128
+  max_speakers: 800
+  profiles:
+    - {noise_scale: 0.5, noise_scale_w: 0.6, length_scale: 1.0}
+    - {noise_scale: 0.667, noise_scale_w: 0.8, length_scale: 0.9}
+    - {noise_scale: 0.8, noise_scale_w: 1.0, length_scale: 1.1}
+  positives:
+    - {text: "hˈeɪ ˈætləs",   ipa: true, samples: 10000}  # general American
+    - {text: "hey atlas",      samples: 2000}             # espeak's own reading
+    - {text: "hey, atlas",     samples: 3000}
+    - {text: "hˈeɪ ˈætlɪs",   ipa: true, samples: 2000}
+    - {text: "hˈeɪ ˈɑtlˈɑs",  ipa: true, samples: 2000}
+    - {text: "hˈeɪ ˈætlɐs",   ipa: true, samples: 1500}   # British, reduced last vowel
+    - {text: "hˈæɪ ˈætləs",   ipa: true, samples: 1500}   # Australian "hey"
+    - {text: "hˈeː ˈatləs",   ipa: true, samples: 1500}   # Scottish/Irish, flat "ay" and open a
+    - {text: "hˈeː ˈætlas",   ipa: true, samples: 1500}   # Indian English, flat "ay", full last vowel
+    - {text: "hˈeɪ ˈɛtləs",   ipa: true, samples: 1000}   # South African / New Zealand, raised "a"
+    - {text: "hˈeɪ ˈatlas",   ipa: true, samples: 1000}   # Spanish-influenced, pure vowels
+    - {text: "hˈɛɪ ˈatlas",   ipa: true, samples: 1000}   # German-influenced
+    - {text: "ˈeɪ atlˈɑs",    ipa: true, samples: 800}    # French-influenced, dropped h, end stress
+    - {text: "hˈeɪ ˈætələs",  ipa: true, samples: 800}    # extra vowel inside "tl", e.g. Mandarin-influenced
+    - {text: "hɛ ˈætləs",     ipa: true, samples: 1000}   # fast, reduced "hey"
+    - {text: "hˈeɪ ætlˈæs",   ipa: true, samples: 600}    # stress on the second syllable
+  negatives:
+    samples_per_phrase: 800
+    phrases:
+      - "hey atlantis"
+      - "hey atlanta"
+      - "at last"
+      - "hey, at last"
+      - "hey alice"
+      - "hey alexa"
+      - "hey atticus"
+      - "hey at less"
+      - "hey actress"
+      - "hey alas"
+      - "hey alaska"
+      - "hey atkins"
+      - "hey that's"
+      - "hey lass"
+      - "a lass"
+      - "hey allison"
+      - "hey elvis"
+      - "hey siri"
+      - "hey google"
+      - "hey mycroft"
+      - "hey jarvis"
+      - "hey there"
+      - "hey"
+      - "okay"
+
+real:
+  channel: 1
+  min_s: 0.35
+  max_s: 2.2
+  clip_peak: 0.99
+  pad_pre_s: 0.15
+  pad_post_s: 0.25
+
+augment:
+  duration_s: 3.2
+  snr_db: [-5, 20]
+  jitter_s: [0.10, 0.50]
+  probabilities:
+    SevenBandParametricEQ: 0.15
+    TanhDistortion: 0.10
+    PitchShift: 0.15
+    BandStopFilter: 0.10
+    AddColorNoise: 0.20
+    AddBackgroundNoise: 0.85
+    Gain: 1.0
+    GainTransition: 0.25
+    RIR: 0.60
+
+features:
+  min_free_gb: 100
+  remove_silence: true
+  repeat_train: 2
+  sets:
+    synthetic_positive: {sampling_weight: 8.0, penalty_weight: 2.0, truth: true, truncation: truncate_start, repeat_train: 3}
+    real_positive: {sampling_weight: 10.0, penalty_weight: 2.0, truth: true, truncation: truncate_start, repeat_train: 8, repeat_validation: 2}
+    synthetic_hard_negative: {sampling_weight: 8.0, penalty_weight: 5.0, truth: false, truncation: random, repeat_train: 2}
+    real_hard_negative: {sampling_weight: 8.0, penalty_weight: 5.0, truth: false, truncation: truncate_start, repeat_train: 8, repeat_validation: 2}
+    fp_negative: {sampling_weight: 8.0, penalty_weight: 5.0, truth: false, truncation: truncate_start, repeat_train: 6}
+
+negative_datasets:
+  speech: {sampling_weight: 10.0, penalty_weight: 2.5, truncation: random}
+  dinner_party: {sampling_weight: 15.0, penalty_weight: 3.0, truncation: random}
+  no_speech: {sampling_weight: 5.0, penalty_weight: 1.0, truncation: random}
+  dinner_party_eval: {sampling_weight: 0.0, penalty_weight: 1.0, truncation: split}
+
+training:
+  steps: [25000, 10000]
+  learning_rates: [0.001, 0.0001]
+  positive_class_weight: [2, 2]
+  negative_class_weight: [50, 60]
+  batch_size: 256
+  eval_step_interval: 500
+  clip_duration_ms: 1500
+  time_mask_max_size: [5, 5]
+  time_mask_count: [1, 1]
+  freq_mask_max_size: [3, 3]
+  freq_mask_count: [1, 1]
+  target_minimization: 3.0
+  minimization_metric: ambient_false_positives_per_hour
+  maximization_metric: average_viable_recall
+
+architecture:
+  type: mixednet
+  pointwise_filters: "60,60,60,60"
+  repeat_in_block: "1, 1, 1, 1"
+  mixconv_kernel_sizes: "[5], [9], [13], [21]"
+  residual_connection: "0,0,0,0"
+  first_conv_filters: 30
+  first_conv_kernel_size: 5
+  stride: 3
+
+export:
+  probability_cutoff: 0.90
+  sliding_window_size: 5
+  feature_step_size: 10
+  tensor_arena_size: 30000
+  minimum_esphome_version: "2024.7.0"
+  reference_model: models/stock/hey_jarvis
+
+eval:
+  target_faph: 0.5
+  mine_cutoff: 0.6
+  hard_negative_max_fp_rate: 0.02

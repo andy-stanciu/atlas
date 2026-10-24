@@ -1,0 +1,14 @@
+pyyaml
+numpy
+scipy
+soundfile
+librosa
+tqdm
+huggingface_hub
+datasets<4
+mmap_ninja
+pymicro-features
+tensorboard
+cython
+setuptools<81
+audio-metadata @ git+https://github.com/whatsnowplaying/audio-metadata@d4ebb238e6a401bb1a5aaaac60c9e2b3cb30929f

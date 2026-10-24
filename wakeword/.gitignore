@@ -1,0 +1,7 @@
+.venv/
+third_party/
+data/
+work/
+models/stock/
+models/*.pt
+__pycache__/
