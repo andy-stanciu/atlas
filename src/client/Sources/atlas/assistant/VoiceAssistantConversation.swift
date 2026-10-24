@@ -47,9 +47,14 @@ extension VoiceAssistant {
         }
     }
 
-    func resetConversationTimeout() {
+    func resetConversationTimeout(after delay: TimeInterval = Config.conversationTimeoutSeconds) {
         let workItem = DispatchWorkItem { [weak self] in
-            self?.endConversation()
+            guard let self else { return }
+            guard self.lock.withLock({ self.state == .listening }) else {
+                self.resetConversationTimeout(after: Config.conversationRetrySeconds)
+                return
+            }
+            self.endConversation()
         }
 
         lock.withLock {
@@ -57,14 +62,18 @@ extension VoiceAssistant {
             conversationTimeoutWorkItem = workItem
         }
 
-        lifecycleQueue.asyncAfter(
-            deadline: .now() + Config.conversationTimeoutSeconds,
-            execute: workItem
-        )
+        lifecycleQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    func armConversationTimeoutIfNeeded() {
+        guard lock.withLock({ conversationActive && conversationTimeoutWorkItem == nil }) else {
+            return
+        }
+        resetConversationTimeout()
     }
 
     func handleWordReceived() {
-        guard lock.withLock({ conversationActive }) else {
+        guard lock.withLock({ conversationActive && state == .recording }) else {
             return
         }
         resetConversationTimeout()
@@ -146,6 +155,9 @@ extension VoiceAssistant {
             currentPlaybackPurpose = nil
             activeTurnSpeaker = nil
             clearPreRoll()
+        }
+        if lock.withLock({ conversationActive }) {
+            armConversationTimeoutIfNeeded()
         }
         cancelRecognizerSession()
     }

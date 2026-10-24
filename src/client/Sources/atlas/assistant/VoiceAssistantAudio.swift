@@ -214,7 +214,9 @@ extension VoiceAssistant {
             queuedAudioBuffers = 0
             currentPlaybackPurpose = nil
         }
-
+        if lock.withLock({ conversationActive }) {
+            armConversationTimeoutIfNeeded()
+        }
         if wasRecording {
             cancelRecognizerSession()
         }

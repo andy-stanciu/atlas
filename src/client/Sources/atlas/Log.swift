@@ -91,7 +91,9 @@ enum Log {
     }
 
     static func postprocess(_ message: String) {
-        write("[postprocess] \(message)", color: Palette.red)
+        if Config.printPostprocessDebug {
+            write("[postprocess] \(message)", color: Palette.red)
+        }
     }
 
     static func endpoint(_ message: String) {

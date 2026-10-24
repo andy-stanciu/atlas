@@ -34,7 +34,7 @@ struct Config {
     static let maxToolLoopSteps = 16
     static let lowLatencyMode = true
     static let verboseToolCalling = false
-    static let enableToolCallSfx = true
+    static let enableToolCallSfx = false
     static let llmPrefixStabilityCheck = false
     static let maxHistoryMessages = 24
     static let historyTrimTarget = 14
@@ -47,10 +47,11 @@ struct Config {
     static let musicFIFOPath = "/tmp/atlas-music.fifo"
     static let musicSourceSampleRate: Double = 44_100
     static let musicDownlinkSampleRate: Double = 48_000
-    static let musicMaxVolume: Float = 0.75
+    static let musicMaxVolume: Float = 0.6
     static let musicDuckGain: Float = 0.15
     static let musicDuckLowPassHz: Double = 1_500
     static let musicOpenLowPassHz: Double = musicDownlinkSampleRate / 2
+    static let musicDuckHoldSeconds: TimeInterval = conversationTimeoutSeconds / 2
 
     // Audio / VAD
     static let audioFrameMilliseconds: Double = 20
@@ -68,6 +69,7 @@ struct Config {
     // Conversation timing
     static let conversationTimeoutSeconds: TimeInterval = 7.0
     static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
+    static let conversationRetrySeconds: TimeInterval = 0.25
 
     // Wake word
     static let wakeGreeting = "Hey Atlas"
@@ -94,8 +96,8 @@ struct Config {
         "Just a moment, please.",
         "Give me a second.",
     ]
-    static let sfxVolume: Float = 0.7
-    static let speakingVolume: Float = 0.9
+    static let sfxVolume: Float = 0.5
+    static let speakingVolume: Float = 0.6
     static let toolCueFrequency1: Double = 880
     static let toolCueFrequency2: Double = 1_320
     static let toolCueDuration: TimeInterval = 0.14
@@ -115,11 +117,12 @@ struct Config {
     static let debugTurnRecording = false
     static let debugDownlinkStats = false
     static let printTimingDebug = false
+    static let printPostprocessDebug = false
     static let printSpeakerDebug = false
     static let printToolCallDebug = false
     static let printEndpointDebug = false
     static let printMusicDebug = false
-    static let printLinkDebug = true
+    static let printLinkDebug = false
     static let printLinkStalls = true
     static let printConnectionDebug = true
     static let linkStallMs: Double = 60
