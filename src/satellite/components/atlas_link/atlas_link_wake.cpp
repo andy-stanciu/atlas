@@ -55,7 +55,7 @@ namespace esphome
 
     bool AtlasLink::pump_mic_()
     {
-      uint8_t buf[FRAME_BYTES];
+      uint8_t buf[MIC_FRAME_BYTES];
       for (int i = 0; i < MIC_PUMP_BURST; i++)
       {
         uint32_t wr = mic_wr_.load(std::memory_order_acquire);
@@ -68,14 +68,14 @@ namespace esphome
           txdrop_ += skip;
           mic_rd_ += skip;
         }
-        memcpy(buf, micring_ + (mic_rd_ % MIC_RING_FRAMES) * FRAME_BYTES, FRAME_BYTES);
+        memcpy(buf, micring_ + (mic_rd_ % MIC_RING_FRAMES) * MIC_FRAME_BYTES, MIC_FRAME_BYTES);
         if (mic_wr_.load(std::memory_order_acquire) - mic_rd_ >= MIC_RING_FRAMES)
         {
           txdrop_++;
           mic_rd_++;
           continue;
         }
-        if (!send_frame_(FRAME_MIC, buf, FRAME_BYTES))
+        if (!send_frame_(FRAME_MIC2, buf, MIC_FRAME_BYTES))
           return false;
         mic_rd_++;
         micFrames_++;

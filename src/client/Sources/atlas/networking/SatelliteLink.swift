@@ -59,6 +59,7 @@ final class SatelliteLink: @unchecked Sendable {
         case control = 0x03
         case event = 0x04
         case music = 0x05
+        case micDual = 0x06
 
         var kind: LinkKind {
             switch self {
@@ -99,6 +100,7 @@ final class SatelliteLink: @unchecked Sendable {
     private let onAudio: (UnsafePointer<Float>, Int) -> Void
     private let onDisconnect: () -> Void
     var onWake: ((Int) -> Void)?
+    var onDualAudio: ((UnsafePointer<Float>, UnsafePointer<Float>, Int) -> Void)?
 
     private let queue = DispatchQueue(
         label: "atlas.satellite",
@@ -506,6 +508,10 @@ final class SatelliteLink: @unchecked Sendable {
     }
 
     private func handleFrame(type: UInt8, payload: Data) {
+        if type == FrameType.micDual.rawValue {
+            handleDualMic(payload)
+            return
+        }
         if type == FrameType.event.rawValue {
             if payload.first == Event.wake.rawValue {
                 onWake?(payload.count > 1 ? Int(payload[1]) : 0)
@@ -541,6 +547,35 @@ final class SatelliteLink: @unchecked Sendable {
                     return
                 }
                 self.onAudio(base, count)
+            }
+        }
+    }
+
+    private func handleDualMic(_ payload: Data) {
+        guard let onDualAudio else {
+            return
+        }
+        let pairs = payload.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+        let count = pairs.count / 2
+        guard count > 0 else {
+            return
+        }
+
+        let scale: Float = 1.0 / 32_768.0
+        let speech = (0..<count).map { Float(pairs[2 * $0]) * scale }
+        let vad = (0..<count).map { Float(pairs[2 * $0 + 1]) * scale }
+        if let debugMicTap {
+            debugMicTap.append(Data(bytes: (0..<count).map { pairs[2 * $0] }, count: count * 2))
+        }
+
+        audioQueue.async {
+            speech.withUnsafeBufferPointer { s in
+                vad.withUnsafeBufferPointer { v in
+                    guard let sBase = s.baseAddress, let vBase = v.baseAddress else {
+                        return
+                    }
+                    onDualAudio(sBase, vBase, count)
+                }
             }
         }
     }

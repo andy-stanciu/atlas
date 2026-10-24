@@ -23,23 +23,22 @@ namespace esphome
 
     void AtlasLink::on_mic_data_(const std::vector<uint8_t> &data)
     {
-      // 16 kHz s32le stereo interleaved -> left channel s16le (use p + 4 for right)
       const uint8_t *p = data.data();
       size_t n = data.size();
       while (n >= 8)
       {
-        int32_t v;
-        memcpy(&v, p + 4 * MIC_STT_CHANNEL, 4);
-        int32_t g = (int32_t)(((int64_t)(v >> 16) * MIC_STT_GAIN_Q8) >> 8);
-        int16_t s = (int16_t)(g > 32767 ? 32767 : (g < -32768 ? -32768 : g));
-        txacc_[txfill_++] = s & 0xff;
-        txacc_[txfill_++] = (uint8_t)(s >> 8);
+        int32_t pair[2];
+        memcpy(pair, p, 8);
+        int32_t stt = (int32_t)(((int64_t)(pair[MIC_STT_CHANNEL] >> 16) * MIC_STT_GAIN_Q8) >> 8);
+        int16_t out[2] = {(int16_t)(stt > 32767 ? 32767 : (stt < -32768 ? -32768 : stt)), (int16_t)(pair[MIC_VAD_CHANNEL] >> 16)};
+        memcpy(txacc_ + txfill_, out, sizeof(out));
+        txfill_ += sizeof(out);
         p += 8;
         n -= 8;
-        if (txfill_ == FRAME_BYTES)
+        if (txfill_ == MIC_FRAME_BYTES)
         {
           uint32_t wr = mic_wr_.load(std::memory_order_relaxed);
-          memcpy(micring_ + (wr % MIC_RING_FRAMES) * FRAME_BYTES, txacc_, FRAME_BYTES);
+          memcpy(micring_ + (wr % MIC_RING_FRAMES) * MIC_FRAME_BYTES, txacc_, MIC_FRAME_BYTES);
           mic_wr_.store(wr + 1, std::memory_order_release);
           txfill_ = 0;
           if (streaming_ && task_ != nullptr)

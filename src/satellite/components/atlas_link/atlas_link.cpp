@@ -81,7 +81,7 @@ namespace esphome
       mixbuf_ = (uint8_t *)heap_caps_malloc(MUSIC_BYTES, MALLOC_CAP_SPIRAM);
       voicebuf_ = (uint8_t *)heap_caps_malloc(MUSIC_BYTES, MALLOC_CAP_SPIRAM);
       musicbuf_ = (uint8_t *)heap_caps_malloc(MUSIC_BYTES, MALLOC_CAP_SPIRAM);
-      micring_ = (uint8_t *)heap_caps_calloc(MIC_RING_FRAMES, FRAME_BYTES, MALLOC_CAP_SPIRAM);
+      micring_ = (uint8_t *)heap_caps_calloc(MIC_RING_FRAMES, MIC_FRAME_BYTES, MALLOC_CAP_SPIRAM);
       mic_->add_data_callback([this](const std::vector<uint8_t> &data)
                               { this->on_mic_data_(data); });
       xTaskCreate(task_fn_, "atlas_link", 8192, this, 10, &task_);

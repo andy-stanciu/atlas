@@ -3,13 +3,14 @@ import QuartzCore
 
 extension VoiceAssistant {
 
-    func handleAudio(samples: UnsafePointer<Float>, count: Int) {
+    func handleAudio(samples: UnsafePointer<Float>, vad: UnsafePointer<Float>? = nil, count: Int) {
         guard count > 0 else {
             return
         }
 
-        let rmsValue = rms(samples, count: count)
-        let peakValue = peak(samples, count: count)
+        let sense = vad ?? samples
+        let rmsValue = rms(sense, count: count)
+        let peakValue = peak(sense, count: count)
         let voiced =
             rmsValue >= Config.speechThreshold
             || peakValue >= Config.speechPeakThreshold

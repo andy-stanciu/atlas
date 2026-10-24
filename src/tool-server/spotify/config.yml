@@ -20,7 +20,7 @@ crossfade_duration: 0
 normalisation_disabled: true
 
 volume_steps: 100
-initial_volume: 80
+initial_volume: 50
 ignore_last_volume: true
 external_volume: false
 

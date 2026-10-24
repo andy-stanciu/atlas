@@ -62,7 +62,8 @@ namespace esphome
       FRAME_TTS = 0x02,
       FRAME_CTRL = 0x03,
       FRAME_EVENT = 0x04,
-      FRAME_MUSIC = 0x05
+      FRAME_MUSIC = 0x05,
+      FRAME_MIC2 = 0x06
     };
 
     // CTRL_MUSIC_DUCK payload: [cmd, gain u8, cutoff_hz u16 LE]; the cutoff is
@@ -103,6 +104,8 @@ namespace esphome
     // Frame sizes: 20 ms of audio per frame on every path.
     static constexpr size_t FRAME_SAMPLES = 320;             // 20 ms @ 16 kHz
     static constexpr size_t FRAME_BYTES = FRAME_SAMPLES * 2; // s16le mono
+    static constexpr size_t MIC_FRAME_BYTES = FRAME_BYTES * 2; // s16le stereo: [stt, vad]
+    static constexpr size_t MIC_VAD_CHANNEL = 0;               // 0 = left (comms), 1 = right (ASR)
     static constexpr size_t MUSIC_BYTES = 3840;              // 20 ms @ 48 kHz s16 stereo
 
     // Largest legitimate downlink payload is MUSIC_BYTES; anything bigger is
@@ -296,7 +299,7 @@ namespace esphome
       StereoLowPass lp_;
       volatile uint32_t last_music_rx_{0};
       volatile uint32_t last_voice_rx_{0};
-      uint8_t txacc_[FRAME_BYTES]{};
+      uint8_t txacc_[MIC_FRAME_BYTES]{};
       size_t txfill_{0};
       int16_t fir_hist_[16] = {};
       std::vector<int16_t> outbuf_;

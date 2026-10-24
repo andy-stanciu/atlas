@@ -109,6 +109,9 @@ final class VoiceAssistant {
         satellite.onWake = { [weak self] replay in
             self?.armWake(replayFrames: replay)
         }
+        satellite.onDualAudio = { [weak self] speech, vad, count in
+            self?.handleAudio(samples: speech, vad: vad, count: count)
+        }
         soundEffects = SoundEffects(satellite: satellite)
         musicStream = MusicStream(satellite: satellite)
 
