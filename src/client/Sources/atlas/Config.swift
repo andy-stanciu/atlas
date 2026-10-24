@@ -51,7 +51,6 @@ struct Config {
     static let musicDuckGain: Float = 0.15
     static let musicDuckLowPassHz: Double = 1_500
     static let musicOpenLowPassHz: Double = musicDownlinkSampleRate / 2
-    static let musicDuckHoldSeconds: TimeInterval = conversationTimeoutSeconds / 2
 
     // Audio / VAD
     static let audioFrameMilliseconds: Double = 20
@@ -67,7 +66,7 @@ struct Config {
     static let speculativeEarlySilenceFrames = 15  // ~300ms at 20ms/frame
 
     // Conversation timing
-    static let conversationTimeoutSeconds: TimeInterval = 7.0
+    static let conversationTimeoutSeconds: TimeInterval = 5.0
     static let interruptGracePeriodSeconds: CFTimeInterval = 1.0
     static let conversationRetrySeconds: TimeInterval = 0.25
 

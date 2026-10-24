@@ -29,11 +29,14 @@ extension VoiceAssistant {
                 return
             }
 
-            let transcript = try await timed("STT") {
-                TranscriptCorrection.apply(try await client.finish())
+            let (transcript, input) = try await timed("STT") {
+                let result = try await client.finishWithInput()
+                return (TranscriptCorrection.apply(result.transcript), result.input)
             }
 
             guard !transcript.isEmpty || woke else {
+                PersistentLog.saveDiscarded(
+                    input, transcript: transcript, reason: "no speech recognized")
                 Log.blank()
                 Log.system("No speech recognized.")
                 transitionToListening()
@@ -42,6 +45,7 @@ extension VoiceAssistant {
 
             try await processRecognizedTurn(
                 transcript: transcript,
+                input: input,
                 wavURL: wavURL,
                 woke: woke
             )
@@ -66,6 +70,7 @@ extension VoiceAssistant {
 
     func processRecognizedTurn(
         transcript: String,
+        input: STTInput,
         wavURL: URL,
         woke: Bool = false
     ) async throws {
@@ -90,6 +95,7 @@ extension VoiceAssistant {
 
         if !active {
             guard woke || isWakeGreeting(transcript) else {
+                PersistentLog.saveDiscarded(input, transcript: transcript, reason: "no wake word")
                 transitionToListening()
                 return
             }
@@ -104,7 +110,7 @@ extension VoiceAssistant {
 
         let logHandle = PersistentLog.beginTurn()
         if let logHandle {
-            PersistentLog.saveSpeech(logHandle, wavURL: wavURL, transcript: transcript)
+            PersistentLog.saveSpeech(logHandle, input: input, transcript: transcript)
         }
 
         let speakerResponse: SpeakerIdentificationResponse?

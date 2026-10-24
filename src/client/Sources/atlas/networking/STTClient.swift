@@ -17,6 +17,11 @@ enum STTClientError: LocalizedError {
     }
 }
 
+struct STTInput: Sendable {
+    let pcm: Data
+    let sampleRate: Int
+}
+
 actor STTClient {
     private static let targetSampleRate = 24_000
     private static let frameSamples = 480  // 20ms @ 24kHz, matches the server's encoder step
@@ -42,6 +47,8 @@ actor STTClient {
     private var totalInputSamplesConsumed = 0
     private var nextOutputIndex = 0
     private var lastRawSample: Float = 0
+    private var capturedPCM = Data()
+    private var capturedRate = 0
 
     init(
         host: String = Config.sttServerHost,
@@ -94,6 +101,8 @@ actor STTClient {
         nextOutputIndex = 0
         lastRawSample = 0
         onPauseScoreUpdate?(0)
+        capturedPCM = Data()
+        capturedRate = 0
 
         receiveLoop = Task { [weak self] in
             await self?.runReceiveLoop(newTask)
@@ -104,7 +113,8 @@ actor STTClient {
         guard let task else {
             throw STTClientError.notConnected
         }
-
+        capturedPCM.append(pcm)
+        capturedRate = sourceSampleRate
         pendingSamples.append(contentsOf: resample(pcm, sourceSampleRate: sourceSampleRate))
 
         while pendingSamples.count >= Self.frameSamples {
@@ -143,6 +153,11 @@ actor STTClient {
             throw error
         }
         return result
+    }
+
+    func finishWithInput() async throws -> (transcript: String, input: STTInput) {
+        let input = STTInput(pcm: capturedPCM, sampleRate: capturedRate)
+        return (try await finish(), input)
     }
 
     func cancel() async throws {

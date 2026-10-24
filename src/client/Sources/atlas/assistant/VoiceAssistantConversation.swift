@@ -107,6 +107,7 @@ extension VoiceAssistant {
 
         if didEnd {
             LLMPrefixStability.reset()
+            PersistentLog.endConversation()
             clearTools()
             soundEffects.play("shutdown")
             Log.blank()

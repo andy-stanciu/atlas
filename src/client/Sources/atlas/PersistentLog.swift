@@ -35,7 +35,14 @@ enum PersistentLog {
     private static var nextConversationID = 1
     private static var currentConversationURL: URL?
     private static var nextTurnID = 1
+    private static var nextUnattachedTurnID = 1
     private static var conversationTranscriptHandle: FileHandle?
+
+    private static var unattachedURL: URL? {
+        guard let url = sessionURL?.appendingPathComponent("unattached") else { return nil }
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 
     static func beginConversation() {
         guard let sessionURL else { return }
@@ -56,6 +63,14 @@ enum PersistentLog {
         }
     }
 
+    static func endConversation() {
+        lock.withLock {
+            conversationTranscriptHandle?.closeFile()
+            conversationTranscriptHandle = nil
+            currentConversationURL = nil
+        }
+    }
+
     static func appendTranscript(_ text: String) {
         lock.withLock {
             let data = Data(text.utf8)
@@ -66,21 +81,31 @@ enum PersistentLog {
 
     static func beginTurn() -> TurnHandle? {
         lock.withLock {
-            guard let currentConversationURL else { return nil }
-            let id = nextTurnID
-            nextTurnID += 1
-            return TurnHandle(conversationURL: currentConversationURL, turnID: id)
+            if let currentConversationURL {
+                let id = nextTurnID
+                nextTurnID += 1
+                return TurnHandle(conversationURL: currentConversationURL, turnID: id)
+            }
+            guard let unattachedURL else { return nil }
+            let id = nextUnattachedTurnID
+            nextUnattachedTurnID += 1
+            return TurnHandle(conversationURL: unattachedURL, turnID: id)
         }
     }
 
-    static func saveSpeech(_ handle: TurnHandle, wavURL: URL, transcript: String) {
-        let destWAV = handle.conversationURL
-            .appendingPathComponent("turn-\(handle.turnID)-speech.wav")
-        try? FileManager.default.copyItem(at: wavURL, to: destWAV)
+    static func saveSpeech(_ handle: TurnHandle, input: STTInput, transcript: String) {
+        if !input.pcm.isEmpty {
+            try? writeWAV(
+                pcm: input.pcm, sampleRate: input.sampleRate, to: path(handle, "speech.wav"))
+        }
+        try? transcript.write(to: path(handle, "speech.txt"), atomically: true, encoding: .utf8)
+    }
 
-        let destText = handle.conversationURL
-            .appendingPathComponent("turn-\(handle.turnID)-speech.txt")
-        try? transcript.write(to: destText, atomically: true, encoding: .utf8)
+    static func saveDiscarded(_ input: STTInput, transcript: String, reason: String) {
+        guard let handle = beginTurn() else { return }
+        saveSpeech(handle, input: input, transcript: transcript)
+        try? "[\(reason)]".write(
+            to: path(handle, "response.txt"), atomically: true, encoding: .utf8)
     }
 
     static func saveResponse(
@@ -99,9 +124,12 @@ enum PersistentLog {
         }
         lines.append(reply)
 
-        let dest = handle.conversationURL
-            .appendingPathComponent("turn-\(handle.turnID)-response.txt")
-        try? lines.joined(separator: "\n").write(to: dest, atomically: true, encoding: .utf8)
+        try? lines.joined(separator: "\n").write(
+            to: path(handle, "response.txt"), atomically: true, encoding: .utf8)
+    }
+
+    private static func path(_ handle: TurnHandle, _ name: String) -> URL {
+        handle.conversationURL.appendingPathComponent("turn-\(handle.turnID)-\(name)")
     }
 
     private static func encodedArguments(_ call: ToolCall) -> String {

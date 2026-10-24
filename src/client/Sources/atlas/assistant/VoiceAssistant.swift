@@ -58,7 +58,6 @@ final class VoiceAssistant {
     var wakeLatched = false {
         didSet { updateMusicDuck() }
     }
-    var musicReleaseWorkItem: DispatchWorkItem?
 
     // Debug metering; only touched on the satellite audio queue
     var micDebugFrames = 0
