@@ -111,7 +111,7 @@ struct Config {
     }()
 
     // Debug logging
-    static let debugAudioLevels = false
+    static let debugAudioLevels = true
     static let debugMicRecording = false
     static let debugTurnRecording = false
     static let debugDownlinkStats = false

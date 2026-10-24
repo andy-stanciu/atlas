@@ -29,8 +29,9 @@ namespace esphome
       while (n >= 8)
       {
         int32_t v;
-        memcpy(&v, p, 4);
-        int16_t s = (int16_t)(v >> 16);
+        memcpy(&v, p + 4 * MIC_STT_CHANNEL, 4);
+        int32_t g = (int32_t)(((int64_t)(v >> 16) * MIC_STT_GAIN_Q8) >> 8);
+        int16_t s = (int16_t)(g > 32767 ? 32767 : (g < -32768 ? -32768 : g));
         txacc_[txfill_++] = s & 0xff;
         txacc_[txfill_++] = (uint8_t)(s >> 8);
         p += 8;

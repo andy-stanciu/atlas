@@ -97,6 +97,9 @@ namespace esphome
 
     // ---- Constants ----
 
+    static constexpr size_t MIC_STT_CHANNEL = 1;
+    static constexpr int32_t MIC_STT_GAIN_Q8 = 256;
+
     // Frame sizes: 20 ms of audio per frame on every path.
     static constexpr size_t FRAME_SAMPLES = 320;             // 20 ms @ 16 kHz
     static constexpr size_t FRAME_BYTES = FRAME_SAMPLES * 2; // s16le mono
