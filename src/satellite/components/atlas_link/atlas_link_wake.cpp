@@ -23,6 +23,7 @@ namespace esphome
     {
       uint32_t wr = mic_wr_.load(std::memory_order_acquire);
       uint32_t back = woke ? std::min<uint32_t>(WAKE_PREROLL_FRAMES, wr) : 0;
+      wake_replay_ = woke ? (uint8_t)back : 0;
       mic_rd_ = wr - back;
       stream_deadline_ = woke ? millis() + WAKE_OPEN_TIMEOUT_MS : 0;
       streaming_ = true;

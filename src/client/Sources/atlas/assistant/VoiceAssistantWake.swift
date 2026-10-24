@@ -7,11 +7,12 @@ extension VoiceAssistant {
         satellite?.setListening(on)
     }
 
-    func armWake() {
+    func armWake(replayFrames: Int) {
         let started = lock.withLock { () -> Bool in
             guard state == .listening, !conversationActive else {
                 return false
             }
+            wakeReplayFrames = replayFrames
             wakeLatched = true
             recording = Data()
             speechFrames = 0

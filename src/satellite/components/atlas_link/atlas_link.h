@@ -111,10 +111,10 @@ namespace esphome
     static constexpr size_t VOICE_RING_FRAMES = 12;      // 240 ms
     static constexpr size_t MUSIC_RING_FRAMES = 100;     // 2 s capacity
     static constexpr size_t MUSIC_RING_TRIM_FRAMES = 25; // 500 ms flood trigger
-    static constexpr size_t MIC_RING_FRAMES = 64;        // 1.28 s, power of two
+    static constexpr size_t MIC_RING_FRAMES = 128;
 
     // Wake uplink.
-    static constexpr size_t WAKE_PREROLL_FRAMES = 30;       // 600 ms replayed on wake
+    static constexpr size_t WAKE_PREROLL_FRAMES = 75;
     static constexpr uint32_t WAKE_OPEN_TIMEOUT_MS = 10000; // host must hold or close
     static constexpr uint32_t WAKE_HOLDOFF_MS = 1500;       // ignore wakes after close
     static constexpr int MIC_PUMP_BURST = 8;
@@ -144,6 +144,8 @@ namespace esphome
     // slow (~5s full range) so restores and music fade-ins are gentle.
     static constexpr float DUCK_STEP_DOWN = 0.25f;
     static constexpr float DUCK_STEP_UP = 0.0025f;
+
+    static_assert(WAKE_PREROLL_FRAMES + 4 <= MIC_RING_FRAMES && WAKE_PREROLL_FRAMES < 256, "preroll exceeds mic ring");
 
     // PSRAM frame ring. Push/pop/clear are serialized by the caller's
     // spinlock. The slot freed by pop is only reused after a full ring wrap,
@@ -270,6 +272,7 @@ namespace esphome
       std::atomic<bool> wake_led_pending_{false};
       std::atomic<uint32_t> wake_holdoff_until_{0};
       uint32_t stream_deadline_{0};
+      uint8_t wake_replay_{0};
 
       // ---- audio state (volatile where written cross-task) ----
       AudioRing vring_;

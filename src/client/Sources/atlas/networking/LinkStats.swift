@@ -160,11 +160,12 @@ final class LinkStats: @unchecked Sendable {
         var tcpPart = ""
         if let i = Self.tcpInfo(fd) {
             newRexmit = i.tcpi_txretransmitpackets
+            let rexmitDelta = newRexmit >= previousRexmit ? newRexmit - previousRexmit : newRexmit
             tcpPart = String(
                 format: " | tcp rtt %dms rto %dms peer wnd %@ rexmit +%d",
                 Int(i.tcpi_rttcur), Int(i.tcpi_rto),
                 Self.kb(Double(i.tcpi_snd_wnd)) as NSString,
-                Int(newRexmit &- previousRexmit)
+                Int(rexmitDelta)
             )
             lastRexmit = newRexmit
         }

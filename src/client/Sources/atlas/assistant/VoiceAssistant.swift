@@ -58,6 +58,7 @@ final class VoiceAssistant {
     var wakeLatched = false {
         didSet { updateMusicDuck() }
     }
+    var wakeReplayFrames = 0
 
     // Debug metering; only touched on the satellite audio queue
     var micDebugFrames = 0
@@ -105,8 +106,8 @@ final class VoiceAssistant {
                 self?.handleSatelliteDisconnect()
             }
         )
-        satellite.onWake = { [weak self] in
-            self?.armWake()
+        satellite.onWake = { [weak self] replay in
+            self?.armWake(replayFrames: replay)
         }
         soundEffects = SoundEffects(satellite: satellite)
         musicStream = MusicStream(satellite: satellite)

@@ -98,7 +98,7 @@ final class SatelliteLink: @unchecked Sendable {
     private let port: UInt16
     private let onAudio: (UnsafePointer<Float>, Int) -> Void
     private let onDisconnect: () -> Void
-    var onWake: (() -> Void)?
+    var onWake: ((Int) -> Void)?
 
     private let queue = DispatchQueue(
         label: "atlas.satellite",
@@ -508,7 +508,7 @@ final class SatelliteLink: @unchecked Sendable {
     private func handleFrame(type: UInt8, payload: Data) {
         if type == FrameType.event.rawValue {
             if payload.first == Event.wake.rawValue {
-                onWake?()
+                onWake?(payload.count > 1 ? Int(payload[1]) : 0)
             }
             return
         }

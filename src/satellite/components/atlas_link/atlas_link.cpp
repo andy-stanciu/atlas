@@ -227,8 +227,8 @@ namespace esphome
         if (wake_req_.exchange(false))
         {
           open_stream_(true);
-          uint8_t ev = EV_WAKE;
-          if (!send_frame_(FRAME_EVENT, &ev, 1))
+          uint8_t ev[2] = {EV_WAKE, wake_replay_};
+          if (!send_frame_(FRAME_EVENT, ev, 2))
             return;
         }
         if (streaming_)

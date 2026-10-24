@@ -60,7 +60,7 @@ struct Config {
     static let interruptSpeechFrames = 4
     static let endSilenceFrames = 125  // 2.5s at 20ms/frame
     static let minimumRecordingBytes = 2_000
-    static let preRollMilliseconds = 500
+    static let preRollMilliseconds = 800
     static let speculativeEndpointingEnabled = true
     static let speculativePauseScoreThreshold: Double = 0.7
     static let speculativeEarlySilenceFrames = 15  // ~300ms at 20ms/frame

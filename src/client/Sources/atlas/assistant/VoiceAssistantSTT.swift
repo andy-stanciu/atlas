@@ -19,6 +19,7 @@ extension VoiceAssistant {
     }
 
     func beginRecognizerSession(preRoll: Data) {
+        lock.withLock { currentPauseScore = 0 }
         let rate = Int(recordingSampleRate.rounded())
         feedRecognizer { client in
             try? await client.begin()

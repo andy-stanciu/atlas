@@ -42,10 +42,7 @@ extension VoiceAssistant {
         var completedSampleRate: Double?
         var shouldStopPlayback = false
 
-        guard lock.try() else {
-            return
-        }
-
+        lock.lock()
         defer {
             lock.unlock()
         }
@@ -77,6 +74,11 @@ extension VoiceAssistant {
                 silenceFrames = 0
             } else {
                 silenceFrames += 1
+            }
+
+            if wakeReplayFrames > 0 {
+                wakeReplayFrames -= 1
+                break
             }
 
             let reachedFallbackSilence = silenceFrames >= Config.endSilenceFrames
@@ -157,7 +159,7 @@ extension VoiceAssistant {
             }
 
         case .processing:
-            break
+            appendToPreRoll(pcm)
         }
 
         if shouldStopPlayback {
@@ -212,6 +214,7 @@ extension VoiceAssistant {
             silenceFrames = 0
             clearPreRoll()
             queuedAudioBuffers = 0
+            wakeReplayFrames = 0
             currentPlaybackPurpose = nil
         }
         if lock.withLock({ conversationActive }) {
