@@ -2,7 +2,6 @@
   "type": "micro",
   "wake_word": "HEY ATLAS",
   "author": "andy",
-  "website": "",
   "model": "hey_atlas.tflite",
   "trained_languages": [
     "en"
