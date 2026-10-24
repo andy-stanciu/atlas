@@ -1,0 +1,17 @@
+# /etc/systemd/system/atlas-stt.service
+[Unit]
+Description=Atlas STT server (Kyutai moshi-server)
+After=network-online.target vllm.service
+Wants=network-online.target
+Requires=vllm.service
+
+[Service]
+Type=simple
+User=andy-stanciu
+WorkingDirectory=/home/andy-stanciu/workplace/atlas/stt-server
+ExecStart=/home/andy-stanciu/.cargo/bin/moshi-server worker --config /home/andy-stanciu/workplace/atlas/stt-server/stt.toml --port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

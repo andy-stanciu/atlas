@@ -1,0 +1,17 @@
+# /etc/systemd/system/atlas-tts.service
+[Unit]
+Description=Kokoro TTS server
+After=network-online.target vllm.service
+Wants=network-online.target
+Requires=vllm.service
+
+[Service]
+Type=simple
+User=andy-stanciu
+WorkingDirectory=/home/andy-stanciu/workplace/atlas/tts-server
+ExecStart=/home/andy-stanciu/workplace/atlas/tts-server/.venv/bin/python tts_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
